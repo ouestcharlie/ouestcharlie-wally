@@ -73,8 +73,12 @@ class PhotoMatch:
 
     # Thumbnail grid location (None when no grid exists for this partition)
     tile_index: int | None
-    thumbnails_path: str | None  # relative path to thumbnails.avif
-    previews_path: str | None    # relative path to previews.avif
+    thumbnails_path: str | None      # relative path to thumbnails.avif
+    thumbnail_cols: int | None       # columns in the thumbnail AVIF grid
+    thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
+    previews_path: str | None        # relative path to previews.avif
+    preview_cols: int | None         # columns in the preview AVIF grid
+    preview_tile_size: int | None    # tile edge in pixels (tiles are square)
 
     # Path for "open with Finder / file system"
     file_path: str  # partition + "/" + filename, relative to backend root
@@ -199,8 +203,12 @@ async def _handle_leaf(
 
     thumbnails_path = _avif_path(manifest.partition, "thumbnails.avif") \
         if manifest.thumbnail_grid is not None else None
+    thumbnail_cols = manifest.thumbnail_grid.cols if manifest.thumbnail_grid is not None else None
+    thumbnail_tile_size = manifest.thumbnail_grid.tile_size if manifest.thumbnail_grid is not None else None
     previews_path = _avif_path(manifest.partition, "previews.avif") \
         if manifest.preview_grid is not None else None
+    preview_cols = manifest.preview_grid.cols if manifest.preview_grid is not None else None
+    preview_tile_size = manifest.preview_grid.tile_size if manifest.preview_grid is not None else None
 
     for entry in manifest.photos:
         if not _matches(entry, predicate):
@@ -215,7 +223,11 @@ async def _handle_leaf(
                 tags=list(entry.tags),
                 tile_index=thumb_index.get(entry.content_hash),
                 thumbnails_path=thumbnails_path,
+                thumbnail_cols=thumbnail_cols,
+                thumbnail_tile_size=thumbnail_tile_size,
                 previews_path=previews_path,
+                preview_cols=preview_cols,
+                preview_tile_size=preview_tile_size,
                 file_path=_file_path(manifest.partition, entry.filename),
             )
         )

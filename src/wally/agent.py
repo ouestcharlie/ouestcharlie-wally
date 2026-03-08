@@ -192,6 +192,14 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["tileIndex"] = m.tile_index
     if m.thumbnails_path is not None:
         d["thumbnailsPath"] = m.thumbnails_path
+    if m.thumbnail_cols is not None:
+        d["thumbnailCols"] = m.thumbnail_cols
+    if m.thumbnail_tile_size is not None:
+        d["thumbnailTileSize"] = m.thumbnail_tile_size
     if m.previews_path is not None:
         d["previewsPath"] = m.previews_path
+    if m.preview_cols is not None:
+        d["previewCols"] = m.preview_cols
+    if m.preview_tile_size is not None:
+        d["previewTileSize"] = m.preview_tile_size
     return d
