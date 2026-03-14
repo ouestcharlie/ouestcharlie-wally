@@ -181,10 +181,134 @@ async def test_overlapping_partition_not_pruned(store: ManifestStore, backend: L
 @pytest.mark.asyncio
 async def test_missing_partition_bbox_not_pruned(store: ManifestStore, backend: LocalBackend) -> None:
     """Partition without GPS bbox summary is never pruned (conservative)."""
-    # Child summary with no GPS stats
     no_gps_summary = PartitionSummary(path="legacy", _stats={})
     await _parent(store, "", [no_gps_summary])
     await _leaf(store, "legacy", [_entry("photo.jpg", lat=48.85, lon=2.35)])
+
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}),
+    )
+    assert result.partitions_pruned == 0
+    assert result.partitions_scanned == 1
+    assert len(result.matches) == 1
+
+
+# ---------------------------------------------------------------------------
+# Boundary conditions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_photo_exactly_on_min_lat_boundary_matches(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    """Photo exactly at min_lat matches (bounds are inclusive)."""
+    await _leaf(store, "", [_entry("edge.jpg", lat=48.0, lon=2.35)])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}),
+    )
+    assert len(result.matches) == 1
+
+
+@pytest.mark.asyncio
+async def test_photo_exactly_on_max_lon_boundary_matches(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    """Photo exactly at max_lon matches (bounds are inclusive)."""
+    await _leaf(store, "", [_entry("edge.jpg", lat=48.5, lon=3.0)])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}),
+    )
+    assert len(result.matches) == 1
+
+
+@pytest.mark.asyncio
+async def test_photo_just_outside_max_lat_excluded(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    """Photo infinitesimally north of max_lat is excluded."""
+    await _leaf(store, "", [_entry("over.jpg", lat=49.0001, lon=2.35)])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}),
+    )
+    assert len(result.matches) == 0
+
+
+# ---------------------------------------------------------------------------
+# Single-bound filters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_only_min_lat_set(store: ManifestStore, backend: LocalBackend) -> None:
+    """GpsBoxFilter with only min_lat rejects photos south of threshold."""
+    await _leaf(store, "", [
+        _entry("north.jpg", lat=50.0, lon=10.0),
+        _entry("south.jpg", lat=40.0, lon=10.0),
+    ])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=45.0)}),
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].filename == "north.jpg"
+
+
+@pytest.mark.asyncio
+async def test_only_max_lon_set(store: ManifestStore, backend: LocalBackend) -> None:
+    """GpsBoxFilter with only max_lon rejects photos east of threshold."""
+    await _leaf(store, "", [
+        _entry("west.jpg", lat=48.0, lon=-5.0),
+        _entry("east.jpg", lat=48.0, lon=10.0),
+    ])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(max_lon=0.0)}),
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].filename == "west.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Mixed GPS / no-GPS in same partition
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_mixed_gps_no_gps_in_same_leaf(store: ManifestStore, backend: LocalBackend) -> None:
+    """Photos without GPS are excluded; photos with GPS inside bbox are included."""
+    await _leaf(store, "", [
+        _entry("gps_in.jpg",   lat=48.85, lon=2.35),
+        _entry("gps_out.jpg",  lat=43.3,  lon=5.37),
+        _entry("no_gps_1.jpg", lat=None,  lon=None),
+        _entry("no_gps_2.jpg", lat=None,  lon=None),
+    ])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}),
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].filename == "gps_in.jpg"
+
+
+# ---------------------------------------------------------------------------
+# Partition bbox exactly touching filter box — not pruned
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_partition_bbox_touches_filter_box_not_pruned(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    """Partition bbox sharing a boundary with filter box is not pruned."""
+    # Partition: lat [47, 48], lon [1, 2] — touches filter at lat=48, lon=2
+    child_summary = _gps_summary("touching", min_lat=47.0, max_lat=48.0, min_lon=1.0, max_lon=2.0)
+    await _parent(store, "", [child_summary])
+    await _leaf(store, "touching", [_entry("border.jpg", lat=48.0, lon=2.0)])
 
     result = await search_photos(
         backend,
