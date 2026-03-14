@@ -3,9 +3,14 @@
 Pure async module — no MCP dependency. Independently testable.
 
 The search algorithm uses two-level pruning (per query_design.md):
-  1. Parent manifest summary pruning: skip subtrees whose date/rating
-     ranges cannot contain any match.
+  1. Parent manifest summary pruning: skip subtrees whose range statistics
+     cannot contain any match (date, rating).
   2. Leaf manifest scan: evaluate the full predicate per photo entry.
+
+The matching and pruning logic is driven by a field configuration (list[FieldDef])
+rather than hardwired field checks. Adding a new searchable field only requires
+adding a FieldDef to PHOTO_FIELDS in ouestcharlie_toolkit.fields — no changes
+here needed.
 
 Wally is read-only — it never writes to manifests or XMP sidecars.
 """
@@ -15,9 +20,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable, Union
 
 from ouestcharlie_toolkit.backend import Backend
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
@@ -30,30 +36,64 @@ _log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Filter value types
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RangeFilter:
+    """Inclusive min/max bounds for a range field (date or int).
+
+    Either bound may be None (open-ended).
+    A None entry value is always excluded when any bound is set.
+    """
+
+    lo: Any = None  # inclusive lower bound (datetime for DATE_RANGE, int for INT_RANGE)
+    hi: Any = None  # inclusive upper bound
+
+
+@dataclass(frozen=True)
+class CollectionFilter:
+    """AND-match filter for a string collection field (e.g. tags).
+
+    All values in `values` must be present in the entry's collection.
+    """
+
+    values: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class StringFilter:
+    """Case-insensitive substring match for a string field (e.g. make, model)."""
+
+    value: str
+
+
+FilterValue = Union[RangeFilter, CollectionFilter, StringFilter]
+
+
+# ---------------------------------------------------------------------------
 # Public data structures
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class SearchPredicate:
-    """Structured filter for a photo search query.
+    """Generic search predicate.
 
-    All fields are optional. An absent field is a wildcard (matches anything).
+    `filters` maps field names (matching FieldDef.name in the active field config)
+    to filter values. An absent key is a wildcard (matches anything).
 
-    V1 supported fields (per query_design.md § V1 scope):
-      - date range (date_min / date_max)
-      - tags (AND semantics — all listed tags must be present)
-      - rating range (rating_min / rating_max)
-      - camera make / model (case-insensitive substring match)
+    Example:
+        SearchPredicate(filters={
+            "date":   RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31)),
+            "rating": RangeFilter(lo=4, hi=None),
+            "tags":   CollectionFilter(values=("travel",)),
+            "make":   StringFilter(value="nikon"),
+        })
     """
 
-    date_min: datetime | None = None
-    date_max: datetime | None = None
-    tags: list[str] = field(default_factory=list)
-    rating_min: int | None = None
-    rating_max: int | None = None
-    make: str | None = None
-    model: str | None = None
+    filters: dict[str, FilterValue] = field(default_factory=dict)
 
 
 @dataclass
@@ -105,6 +145,7 @@ async def search_photos(
     predicate: SearchPredicate,
     root: str = "",
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
+    field_config: list[FieldDef] | None = None,
 ) -> SearchResult:
     """Search all photos matching predicate, traversing from root.
 
@@ -116,18 +157,22 @@ async def search_photos(
     returns an empty result (not an error).
 
     Args:
-        backend: Backend to search (read-only).
-        predicate: Filter to apply. An empty predicate matches all photos.
-        root: Subtree to search (default "" = entire backend).
-        on_progress: Optional async callback(partitions_scanned, partition)
-            invoked after each leaf manifest is scanned.
+        backend:      Backend to search (read-only).
+        predicate:    Filter to apply. An empty predicate matches all photos.
+        root:         Subtree to search (default "" = entire backend).
+        on_progress:  Optional async callback(partitions_scanned, partition)
+                      invoked after each leaf manifest is scanned.
+        field_config: Field definitions driving match and prune logic.
+                      Defaults to PHOTO_FIELDS from ouestcharlie_toolkit.fields.
 
     Returns:
         SearchResult with all matching PhotoMatch entries.
     """
+    if field_config is None:
+        field_config = PHOTO_FIELDS
     result = SearchResult()
     store = ManifestStore(backend)
-    await _traverse(store, root, predicate, result, on_progress)
+    await _traverse(store, root, predicate, result, on_progress, field_config)
     return result
 
 
@@ -142,17 +187,12 @@ async def _traverse(
     predicate: SearchPredicate,
     result: SearchResult,
     on_progress: Callable[[int, str], Awaitable[None]] | None,
+    field_config: list[FieldDef],
 ) -> None:
-    """Recursive descent through the manifest tree.
-
-    Reads the manifest at partition. If it is a ParentManifest, prunes
-    children by their summary then recurses into survivors. If it is a
-    LeafManifest, scans all photo entries.
-    """
+    """Recursive descent through the manifest tree."""
     try:
         manifest, _version = await store.read_any(partition)
     except FileNotFoundError:
-        # No manifest at this path — unindexed or empty folder, skip silently.
         _log.error("No manifest at %r", partition)
         return
     except Exception as exc:
@@ -162,9 +202,9 @@ async def _traverse(
         return
 
     if isinstance(manifest, ParentManifest):
-        await _handle_parent(manifest, store, predicate, result, on_progress)
+        await _handle_parent(manifest, store, predicate, result, on_progress, field_config)
     else:
-        await _handle_leaf(manifest, predicate, result, on_progress)
+        await _handle_leaf(manifest, predicate, result, on_progress, field_config)
 
 
 async def _handle_parent(
@@ -173,14 +213,15 @@ async def _handle_parent(
     predicate: SearchPredicate,
     result: SearchResult,
     on_progress: Callable[[int, str], Awaitable[None]] | None,
+    field_config: list[FieldDef],
 ) -> None:
     """Process a parent manifest: prune children, recurse into survivors."""
     for child in manifest.children:
-        if _can_prune(child, predicate):
+        if _can_prune(child, predicate, field_config):
             result.partitions_pruned += 1
             _log.debug("Pruned partition %r (summary out of range)", child.path)
         else:
-            await _traverse(store, child.path, predicate, result, on_progress)
+            await _traverse(store, child.path, predicate, result, on_progress, field_config)
 
 
 async def _handle_leaf(
@@ -188,6 +229,7 @@ async def _handle_leaf(
     predicate: SearchPredicate,
     result: SearchResult,
     on_progress: Callable[[int, str], Awaitable[None]] | None,
+    field_config: list[FieldDef],
 ) -> None:
     """Scan a leaf manifest, appending each matching entry to result."""
     result.partitions_scanned += 1
@@ -211,7 +253,7 @@ async def _handle_leaf(
     preview_tile_size = manifest.preview_grid.tile_size if manifest.preview_grid is not None else None
 
     for entry in manifest.photos:
-        if not _matches(entry, predicate):
+        if not _matches(entry, predicate, field_config):
             continue
         result.matches.append(
             PhotoMatch(
@@ -237,7 +279,7 @@ async def _handle_leaf(
 
 
 # ---------------------------------------------------------------------------
-# Pruning and matching
+# Pruning and matching — config-driven
 # ---------------------------------------------------------------------------
 
 
@@ -249,83 +291,96 @@ def _naive(dt: datetime) -> datetime:
     return dt.replace(tzinfo=None)
 
 
-def _can_prune(summary: PartitionSummary, predicate: SearchPredicate) -> bool:
+def _can_prune(
+    summary: PartitionSummary,
+    predicate: SearchPredicate,
+    field_config: list[FieldDef],
+) -> bool:
     """Return True if this partition's summary proves no photo can match.
 
-    Uses only date and rating ranges (V1). Tag/camera pruning requires
-    bloom filters — deferred to post-V1 (full leaf scan instead).
+    Iterates over range-typed fields in field_config. For each field that
+    has a RangeFilter in the predicate and known summary bounds, checks
+    whether the ranges are disjoint.
 
-    Conservative: if a summary bound is None (unknown), never prune on that
-    dimension.
+    Conservative: if a summary bound is None (unknown), never prune on
+    that dimension. Non-range fields (STRING_COLLECTION, STRING_MATCH)
+    require full leaf scan — no summary pruning.
     """
-    # Date pruning
-    if predicate.date_min is not None and summary.date_max is not None:
-        if _naive(summary.date_max) < _naive(predicate.date_min):
-            return True
-    if predicate.date_max is not None and summary.date_min is not None:
-        if _naive(summary.date_min) > _naive(predicate.date_max):
-            return True
+    for fdef in field_config:
+        if fdef.type not in (FieldType.DATE_RANGE, FieldType.INT_RANGE):
+            continue
+        fv = predicate.filters.get(fdef.name)
+        if not isinstance(fv, RangeFilter):
+            continue
 
-    # Rating pruning
-    if predicate.rating_min is not None and summary.rating_max is not None:
-        if summary.rating_max < predicate.rating_min:
-            return True
-    if predicate.rating_max is not None and summary.rating_min is not None:
-        if summary.rating_min > predicate.rating_max:
-            return True
+        s_max = getattr(summary, fdef.summary_max_attr, None) if fdef.summary_max_attr else None
+        s_min = getattr(summary, fdef.summary_min_attr, None) if fdef.summary_min_attr else None
+        use_naive = fdef.type == FieldType.DATE_RANGE
+
+        if fv.lo is not None and s_max is not None:
+            cmp_s_max = _naive(s_max) if use_naive else s_max
+            cmp_lo = _naive(fv.lo) if use_naive else fv.lo
+            if cmp_s_max < cmp_lo:
+                return True
+
+        if fv.hi is not None and s_min is not None:
+            cmp_s_min = _naive(s_min) if use_naive else s_min
+            cmp_hi = _naive(fv.hi) if use_naive else fv.hi
+            if cmp_s_min > cmp_hi:
+                return True
 
     return False
 
 
-def _matches(entry: object, predicate: SearchPredicate) -> bool:
+def _matches(
+    entry: object,
+    predicate: SearchPredicate,
+    field_config: list[FieldDef],
+) -> bool:
     """Return True if entry satisfies all predicate constraints.
 
-    entry is a PhotoEntry (typed as object to avoid circular imports at
-    call site; duck-typed access is safe because callers always pass
-    PhotoEntry instances).
+    Iterates over field_config, looking up each field's filter in the
+    predicate. An absent filter is a wildcard. Dispatch is by filter
+    value type (RangeFilter, CollectionFilter, StringFilter).
+
+    entry is typed as object to avoid circular imports at call site;
+    duck-typed attribute access is safe because callers always pass
+    PhotoEntry instances.
     """
-    # Date
-    if predicate.date_min is not None:
-        if entry.date_taken is None:  # type: ignore[union-attr]
-            return False
-        if _naive(entry.date_taken) < _naive(predicate.date_min):  # type: ignore[union-attr]
-            return False
-    if predicate.date_max is not None:
-        if entry.date_taken is None:  # type: ignore[union-attr]
-            return False
-        if _naive(entry.date_taken) > _naive(predicate.date_max):  # type: ignore[union-attr]
-            return False
+    for fdef in field_config:
+        fv = predicate.filters.get(fdef.name)
+        if fv is None:
+            continue  # field not constrained — wildcard
 
-    # Tags (AND semantics — all listed tags must be present)
-    if predicate.tags:
-        entry_tags = entry.tags  # type: ignore[union-attr]
-        for tag in predicate.tags:
-            if tag not in entry_tags:
+        entry_val = getattr(entry, fdef.entry_attr, None)
+
+        if isinstance(fv, RangeFilter):
+            # None entry value is excluded by any range bound.
+            if entry_val is None:
                 return False
+            if fdef.type == FieldType.DATE_RANGE:
+                v = _naive(entry_val)
+                if fv.lo is not None and v < _naive(fv.lo):
+                    return False
+                if fv.hi is not None and v > _naive(fv.hi):
+                    return False
+            else:  # INT_RANGE
+                if fv.lo is not None and entry_val < fv.lo:
+                    return False
+                if fv.hi is not None and entry_val > fv.hi:
+                    return False
 
-    # Rating
-    if predicate.rating_min is not None:
-        if entry.rating is None:  # type: ignore[union-attr]
-            return False
-        if entry.rating < predicate.rating_min:  # type: ignore[union-attr]
-            return False
-    if predicate.rating_max is not None:
-        if entry.rating is None:  # type: ignore[union-attr]
-            return False
-        if entry.rating > predicate.rating_max:  # type: ignore[union-attr]
-            return False
+        elif isinstance(fv, CollectionFilter):
+            # All required values must be present (AND semantics).
+            collection = entry_val or []
+            for required in fv.values:
+                if required not in collection:
+                    return False
 
-    # Camera make (case-insensitive substring)
-    if predicate.make is not None:
-        make_val = entry.make  # type: ignore[union-attr]
-        if make_val is None or predicate.make.lower() not in make_val.lower():
-            return False
-
-    # Camera model (case-insensitive substring)
-    if predicate.model is not None:
-        model_val = entry.model  # type: ignore[union-attr]
-        if model_val is None or predicate.model.lower() not in model_val.lower():
-            return False
+        elif isinstance(fv, StringFilter):
+            # Case-insensitive substring; None entry is excluded.
+            if entry_val is None or fv.value.lower() not in entry_val.lower():
+                return False
 
     return True
 

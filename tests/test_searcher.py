@@ -21,7 +21,15 @@ from ouestcharlie_toolkit.schema import (
     manifest_path,
 )
 
-from wally.searcher import PhotoMatch, SearchPredicate, SearchResult, search_photos
+from wally.searcher import (
+    CollectionFilter,
+    PhotoMatch,
+    RangeFilter,
+    SearchPredicate,
+    SearchResult,
+    StringFilter,
+    search_photos,
+)
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -107,7 +115,7 @@ async def test_date_range_matches(store: ManifestStore, backend: LocalBackend) -
     await _leaf(store, "", [_entry(date_taken=datetime(2024, 7, 14))])
     result = await search_photos(
         backend,
-        SearchPredicate(date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)),
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "photo.jpg"
@@ -119,7 +127,7 @@ async def test_date_range_excludes(store: ManifestStore, backend: LocalBackend) 
     await _leaf(store, "", [_entry(date_taken=datetime(2023, 6, 1))])
     result = await search_photos(
         backend,
-        SearchPredicate(date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)),
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
     )
     assert len(result.matches) == 0
 
@@ -144,7 +152,8 @@ async def test_photo_without_date_excluded_by_date_predicate(
     """Photo with date_taken=None is excluded when predicate has date_min."""
     await _leaf(store, "", [_entry(date_taken=None)])
     result = await search_photos(
-        backend, SearchPredicate(date_min=datetime(2024, 1, 1))
+        backend,
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     assert len(result.matches) == 0
 
@@ -168,7 +177,10 @@ async def test_photo_without_date_included_by_empty_predicate(
 async def test_tag_filter_matches(store: ManifestStore, backend: LocalBackend) -> None:
     """Photo with matching tag is returned."""
     await _leaf(store, "", [_entry(tags=["travel", "france"])])
-    result = await search_photos(backend, SearchPredicate(tags=["travel"]))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"tags": CollectionFilter(values=("travel",))}),
+    )
     assert len(result.matches) == 1
 
 
@@ -179,7 +191,10 @@ async def test_tag_filter_and_semantics(store: ManifestStore, backend: LocalBack
         _entry("a.jpg", "sha256:aa", tags=["travel", "france"]),
         _entry("b.jpg", "sha256:bb", tags=["travel"]),
     ])
-    result = await search_photos(backend, SearchPredicate(tags=["travel", "france"]))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"tags": CollectionFilter(values=("travel", "france"))}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "a.jpg"
 
@@ -188,7 +203,10 @@ async def test_tag_filter_and_semantics(store: ManifestStore, backend: LocalBack
 async def test_tag_filter_no_match(store: ManifestStore, backend: LocalBackend) -> None:
     """Photo without required tag is excluded."""
     await _leaf(store, "", [_entry(tags=["france"])])
-    result = await search_photos(backend, SearchPredicate(tags=["travel"]))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"tags": CollectionFilter(values=("travel",))}),
+    )
     assert len(result.matches) == 0
 
 
@@ -204,7 +222,10 @@ async def test_rating_min_filter(store: ManifestStore, backend: LocalBackend) ->
         _entry("high.jpg", "sha256:hh", rating=4),
         _entry("low.jpg", "sha256:ll", rating=3),
     ])
-    result = await search_photos(backend, SearchPredicate(rating_min=4))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"rating": RangeFilter(lo=4, hi=None)}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "high.jpg"
 
@@ -216,7 +237,10 @@ async def test_rating_max_filter(store: ManifestStore, backend: LocalBackend) ->
         _entry("low.jpg", "sha256:ll", rating=2),
         _entry("high.jpg", "sha256:hh", rating=3),
     ])
-    result = await search_photos(backend, SearchPredicate(rating_max=2))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"rating": RangeFilter(lo=None, hi=2)}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "low.jpg"
 
@@ -227,7 +251,10 @@ async def test_rating_none_excluded_by_rating_predicate(
 ) -> None:
     """Photo with rating=None is excluded when rating_min is set."""
     await _leaf(store, "", [_entry(rating=None)])
-    result = await search_photos(backend, SearchPredicate(rating_min=1))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"rating": RangeFilter(lo=1, hi=None)}),
+    )
     assert len(result.matches) == 0
 
 
@@ -245,7 +272,10 @@ async def test_make_substring_case_insensitive(
         _entry("nikon.jpg", "sha256:nn", make="Nikon Corporation"),
         _entry("canon.jpg", "sha256:cc", make="Canon"),
     ])
-    result = await search_photos(backend, SearchPredicate(make="nikon"))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "nikon.jpg"
 
@@ -259,7 +289,10 @@ async def test_model_substring_case_insensitive(
         _entry("d850.jpg", "sha256:aa", model="NIKON D850"),
         _entry("other.jpg", "sha256:bb", model="Canon EOS R5"),
     ])
-    result = await search_photos(backend, SearchPredicate(model="d850"))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"model": StringFilter(value="d850")}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "d850.jpg"
 
@@ -270,7 +303,10 @@ async def test_make_none_excluded_by_make_predicate(
 ) -> None:
     """Photo with make=None is excluded when make predicate is set."""
     await _leaf(store, "", [_entry(make=None)])
-    result = await search_photos(backend, SearchPredicate(make="nikon"))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+    )
     assert len(result.matches) == 0
 
 
@@ -295,7 +331,8 @@ async def test_parent_prunes_by_date_summary(
     ])
 
     result = await search_photos(
-        backend, SearchPredicate(date_min=datetime(2024, 1, 1))
+        backend,
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
@@ -316,7 +353,10 @@ async def test_parent_prunes_by_rating_summary(
         _summary("high", rating_min=5, rating_max=5),
     ])
 
-    result = await search_photos(backend, SearchPredicate(rating_min=4))
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"rating": RangeFilter(lo=4, hi=None)}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "high.jpg"
     assert result.partitions_pruned == 1
@@ -333,7 +373,8 @@ async def test_parent_conservative_with_none_summary_dates(
     ])
 
     result = await search_photos(
-        backend, SearchPredicate(date_min=datetime(2024, 1, 1))
+        backend,
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     # The photo itself has no date, so it's excluded at leaf scan — but the
     # partition is NOT pruned at the parent level.
@@ -366,7 +407,7 @@ async def test_tile_index_computed_correctly(
 
     result = await search_photos(
         backend,
-        SearchPredicate(date_min=datetime(2024, 1, 2), date_max=datetime(2024, 1, 2)),
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 2), hi=datetime(2024, 1, 2))}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "b.jpg"
@@ -470,7 +511,7 @@ async def test_multi_partition_search(store: ManifestStore, backend: LocalBacken
 
     result = await search_photos(
         backend,
-        SearchPredicate(date_min=datetime(2024, 1, 1)),
+        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     filenames = {m.filename for m in result.matches}
     assert filenames == {"jan.jpg", "jul1.jpg", "jul2.jpg"}

@@ -9,7 +9,14 @@ from mcp.server.fastmcp import Context
 
 from ouestcharlie_toolkit.server import AgentBase
 
-from .searcher import PhotoMatch, SearchPredicate, search_photos
+from .searcher import (
+    CollectionFilter,
+    PhotoMatch,
+    RangeFilter,
+    SearchPredicate,
+    StringFilter,
+    search_photos,
+)
 
 
 class WallyAgent(AgentBase):
@@ -78,15 +85,26 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
-            predicate = SearchPredicate(
-                date_min=_parse_date_min(date_min),
-                date_max=_parse_date_max(date_max),
-                tags=tags or [],
-                rating_min=rating_min,
-                rating_max=rating_max,
-                make=make,
-                model=model,
-            )
+            filters: dict = {}
+
+            date_lo = _parse_date_min(date_min)
+            date_hi = _parse_date_max(date_max)
+            if date_lo is not None or date_hi is not None:
+                filters["date"] = RangeFilter(lo=date_lo, hi=date_hi)
+
+            if tags:
+                filters["tags"] = CollectionFilter(values=tuple(tags))
+
+            if rating_min is not None or rating_max is not None:
+                filters["rating"] = RangeFilter(lo=rating_min, hi=rating_max)
+
+            if make is not None:
+                filters["make"] = StringFilter(value=make)
+
+            if model is not None:
+                filters["model"] = StringFilter(value=model)
+
+            predicate = SearchPredicate(filters=filters)
 
             partitions_done = 0
 
