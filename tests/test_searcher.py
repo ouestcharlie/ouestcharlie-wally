@@ -55,15 +55,18 @@ def _entry(
     make: str | None = None,
     model: str | None = None,
 ) -> PhotoEntry:
-    return PhotoEntry(
-        filename=filename,
-        content_hash=content_hash,
-        date_taken=date_taken,
-        tags=tags or [],
-        rating=rating,
-        make=make,
-        model=model,
-    )
+    searchable: dict = {}
+    if date_taken is not None:
+        searchable["date_taken"] = date_taken
+    if tags is not None:
+        searchable["tags"] = tags
+    if rating is not None:
+        searchable["rating"] = rating
+    if make is not None:
+        searchable["make"] = make
+    if model is not None:
+        searchable["model"] = model
+    return PhotoEntry(filename=filename, content_hash=content_hash, searchable=searchable)
 
 
 def _summary(
@@ -75,7 +78,7 @@ def _summary(
 ) -> PartitionSummary:
     stats: dict = {}
     if date_min is not None or date_max is not None:
-        stats["date"] = {"type": "date_range", "min": date_min, "max": date_max}
+        stats["dateTaken"] = {"type": "date_range", "min": date_min, "max": date_max}
     if rating_min is not None or rating_max is not None:
         stats["rating"] = {"type": "int_range", "min": rating_min, "max": rating_max}
     return PartitionSummary(path=path, _stats=stats)
@@ -114,7 +117,7 @@ async def test_date_range_matches(store: ManifestStore, backend: LocalBackend) -
     await _leaf(store, "", [_entry(date_taken=datetime(2024, 7, 14))])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "photo.jpg"
@@ -126,7 +129,7 @@ async def test_date_range_excludes(store: ManifestStore, backend: LocalBackend) 
     await _leaf(store, "", [_entry(date_taken=datetime(2023, 6, 1))])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}),
     )
     assert len(result.matches) == 0
 
@@ -152,7 +155,7 @@ async def test_photo_without_date_excluded_by_date_predicate(
     await _leaf(store, "", [_entry(date_taken=None)])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     assert len(result.matches) == 0
 
@@ -331,7 +334,7 @@ async def test_parent_prunes_by_date_summary(
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
@@ -373,7 +376,7 @@ async def test_parent_conservative_with_none_summary_dates(
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     # The photo itself has no date, so it's excluded at leaf scan — but the
     # partition is NOT pruned at the parent level.
@@ -406,7 +409,7 @@ async def test_tile_index_computed_correctly(
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 2), hi=datetime(2024, 1, 2))}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 2), hi=datetime(2024, 1, 2))}),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "b.jpg"
@@ -510,7 +513,7 @@ async def test_multi_partition_search(store: ManifestStore, backend: LocalBacken
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"date": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
     )
     filenames = {m.filename for m in result.matches}
     assert filenames == {"jan.jpg", "jul1.jpg", "jul2.jpg"}

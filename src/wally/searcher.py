@@ -102,14 +102,16 @@ class PhotoMatch:
 
     Contains all information Woof needs to render a gallery entry and
     route thumbnail/preview requests to the AVIF grid tile.
+
+    ``searchable`` mirrors the PhotoEntry.searchable dict (keyed by
+    FieldDef.entry_attr) so Woof can serialise any field without knowing
+    the field list at compile time.
     """
 
     partition: str
     filename: str
     content_hash: str
-    date_taken: datetime | None
-    rating: int | None
-    tags: list[str]
+    searchable: dict[str, Any]  # keyed by FieldDef.entry_attr
 
     # Thumbnail grid location (None when no grid exists for this partition)
     tile_index: int | None
@@ -260,9 +262,7 @@ async def _handle_leaf(
                 partition=manifest.partition,
                 filename=entry.filename,
                 content_hash=entry.content_hash,
-                date_taken=entry.date_taken,
-                rating=entry.rating,
-                tags=list(entry.tags),
+                searchable=dict(entry.searchable),
                 tile_index=thumb_index.get(entry.content_hash),
                 thumbnails_path=thumbnails_path,
                 thumbnail_cols=thumbnail_cols,
@@ -353,7 +353,7 @@ def _matches(
         if fv is None:
             continue  # field not constrained — wildcard
 
-        entry_val = getattr(entry, fdef.entry_attr, None)
+        entry_val = entry.searchable.get(fdef.entry_attr)  # type: ignore[attr-defined]
 
         if isinstance(fv, RangeFilter):
             # None entry value is excluded by any range bound.

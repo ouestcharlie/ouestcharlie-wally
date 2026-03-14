@@ -249,12 +249,19 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         "contentHash": m.content_hash,
         "filePath": m.file_path,
     }
-    if m.date_taken is not None:
-        d["date"] = m.date_taken.isoformat()
-    if m.rating is not None:
-        d["rating"] = m.rating
-    if m.tags:
-        d["tags"] = m.tags
+    for fdef in PHOTO_FIELDS:
+        value = m.searchable.get(fdef.entry_attr)
+        if value is None:
+            continue
+        if fdef.type is FieldType.DATE_RANGE:
+            d[fdef.name] = value.isoformat()
+        elif fdef.type is FieldType.GPS_BOX:
+            d[fdef.name] = list(value)
+        elif fdef.type is FieldType.STRING_COLLECTION:
+            if value:
+                d[fdef.name] = value
+        else:
+            d[fdef.name] = value
     if m.tile_index is not None:
         d["tileIndex"] = m.tile_index
     if m.thumbnails_path is not None:

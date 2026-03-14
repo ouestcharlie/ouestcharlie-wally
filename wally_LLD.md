@@ -46,7 +46,7 @@ tests/
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
 
-**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `filePath`, and optionally `dateTaken` (ISO 8601), `rating`, `tags`, `tileIndex`, `thumbnailsPath`, `previewsPath`.
+**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `filePath` (always present), `tileIndex`, `thumbnailsPath`, `thumbnailCols`, `thumbnailTileSize`, `previewsPath`, `previewCols`, `previewTileSize` (grid fields, present when a thumbnail/preview grid exists), plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`) — serialized by name using `FieldDef.name` as the JSON key.
 
 ## Query Execution: Two-Level Pruning
 
