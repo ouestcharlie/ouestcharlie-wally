@@ -73,13 +73,12 @@ def _summary(
     rating_min: int | None = None,
     rating_max: int | None = None,
 ) -> PartitionSummary:
-    return PartitionSummary(
-        path=path,
-        date_min=date_min,
-        date_max=date_max,
-        rating_min=rating_min,
-        rating_max=rating_max,
-    )
+    stats: dict = {}
+    if date_min is not None or date_max is not None:
+        stats["date"] = {"type": "date_range", "min": date_min, "max": date_max}
+    if rating_min is not None or rating_max is not None:
+        stats["rating"] = {"type": "int_range", "min": rating_min, "max": rating_max}
+    return PartitionSummary(path=path, _stats=stats)
 
 
 async def _leaf(store: ManifestStore, partition: str, photos: list[PhotoEntry],

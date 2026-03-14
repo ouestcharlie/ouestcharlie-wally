@@ -313,8 +313,9 @@ def _can_prune(
         if not isinstance(fv, RangeFilter):
             continue
 
-        s_max = getattr(summary, fdef.summary_max_attr, None) if fdef.summary_max_attr else None
-        s_min = getattr(summary, fdef.summary_min_attr, None) if fdef.summary_min_attr else None
+        field_stat = getattr(summary, fdef.name) if fdef.summary_range else None
+        s_max = field_stat["max"] if field_stat else None
+        s_min = field_stat["min"] if field_stat else None
         use_naive = fdef.type == FieldType.DATE_RANGE
 
         if fv.lo is not None and s_max is not None:
