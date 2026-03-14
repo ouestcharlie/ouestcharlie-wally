@@ -7,6 +7,7 @@ from datetime import datetime
 
 from mcp.server.fastmcp import Context
 
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
@@ -23,7 +24,10 @@ class WallyAgent(AgentBase):
     """Wally: searches the photo library by traversing manifests.
 
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
-    launching). Exposes one MCP tool: ``search_photos_tool``.
+    launching). Exposes two MCP tools:
+    - ``list_search_fields_tool``: returns all queryable fields with types and formats.
+    - ``search_photos_tool``: searches photos using a generic ``filters`` dict driven
+      by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
 
     Wally is read-only — it never writes XMP sidecars or manifests.
     """
@@ -36,15 +40,49 @@ class WallyAgent(AgentBase):
         mcp = self.mcp
 
         @mcp.tool()
+        async def list_search_fields_tool() -> dict:
+            """List all searchable photo fields with their types and filter formats.
+
+            Returns a ``fields`` list of descriptors. Use the field names and formats
+            described here when constructing the ``filters`` argument for
+            ``search_photos_tool``.
+
+            Returns:
+                ``fields`` — list of field descriptors, each with:
+                    ``name`` — field name to use as key in ``filters``.
+                    ``type`` — semantic type (DATE_RANGE, INT_RANGE, STRING_COLLECTION,
+                        STRING_MATCH, GPS_BOX, DESCRIPTIVE).
+                    ``filterFormat`` — description of the expected value format.
+                    ``pruneable`` — True if this field supports partition-level pruning
+                        (faster searches on large libraries).
+            """
+            _FORMAT: dict[FieldType, str] = {
+                FieldType.DATE_RANGE: (
+                    'object with optional "min" and/or "max" (ISO 8601 string; '
+                    'partial dates supported: "2024", "2024-07", "2024-07-14")'
+                ),
+                FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
+                FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
+                FieldType.STRING_MATCH: "string (case-insensitive substring match)",
+                FieldType.GPS_BOX: "not yet implemented",
+                FieldType.DESCRIPTIVE: "not yet implemented",
+            }
+            return {
+                "fields": [
+                    {
+                        "name": fdef.name,
+                        "type": fdef.type.name,
+                        "filterFormat": _FORMAT[fdef.type],
+                        "pruneable": fdef.summary_range,
+                    }
+                    for fdef in PHOTO_FIELDS
+                ]
+            }
+
+        @mcp.tool()
         async def search_photos_tool(
             ctx: Context,
-            date_min: str | None = None,
-            date_max: str | None = None,
-            tags: list[str] | None = None,
-            rating_min: int | None = None,
-            rating_max: int | None = None,
-            make: str | None = None,
-            model: str | None = None,
+            filters: dict | None = None,
             root: str = "",
         ) -> dict:
             """Search photos matching structured predicates.
@@ -54,24 +92,25 @@ class WallyAgent(AgentBase):
             pruning), then scanning surviving leaf manifests entry by entry.
             Wally never reads XMP sidecars — all metadata is inline in manifests.
 
+            Use ``list_search_fields_tool`` to discover all available fields and
+            their expected filter formats.
+
             Args:
-                date_min: Inclusive lower bound for ``date_taken`` (ISO 8601).
-                    Partial dates are expanded to their earliest instant:
-                    ``"2024"`` → ``2024-01-01T00:00:00``,
-                    ``"2024-07"`` → ``2024-07-01T00:00:00``.
-                date_max: Inclusive upper bound for ``date_taken`` (ISO 8601).
-                    Partial dates are expanded to their latest instant:
-                    ``"2024"`` → ``2024-12-31T23:59:59``,
-                    ``"2024-07"`` → ``2024-07-31T23:59:59``.
-                tags: List of tags that must ALL be present (AND semantics).
-                    Matches ``dc:subject`` values in XMP/manifests.
-                rating_min: Inclusive lower bound on ``xmp:Rating``
-                    (0=unrated, 1–5=stars, -1=rejected).
-                rating_max: Inclusive upper bound on ``xmp:Rating``.
-                make: Case-insensitive substring match on camera make
-                    (``tiff:Make``), e.g. ``"nikon"`` matches ``"Nikon D850"``.
-                model: Case-insensitive substring match on camera model
-                    (``tiff:Model``).
+                filters: Optional dict mapping field names to filter values.
+                    The valid fields and their formats are returned by
+                    ``list_search_fields_tool``. Examples::
+
+                        # Photos taken in 2024 rated 4 or 5 stars
+                        {"date": {"min": "2024", "max": "2024"},
+                         "rating": {"min": 4, "max": 5}}
+
+                        # Tagged "vacation" AND "portrait", shot on Nikon
+                        {"tags": ["vacation", "portrait"], "make": "nikon"}
+
+                        # 4K landscape photos (width ≥ 3840)
+                        {"width": {"min": 3840}}
+
+                    Omitting a field (or passing None) is a wildcard — matches all.
                 root: Subtree to search, relative to the backend root.
                     Defaults to ``""`` (entire library).
 
@@ -85,26 +124,36 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
-            filters: dict = {}
+            predicate_filters: dict = {}
 
-            date_lo = _parse_date_min(date_min)
-            date_hi = _parse_date_max(date_max)
-            if date_lo is not None or date_hi is not None:
-                filters["date"] = RangeFilter(lo=date_lo, hi=date_hi)
+            for fdef in PHOTO_FIELDS:
+                raw = (filters or {}).get(fdef.name)
+                if raw is None:
+                    continue
 
-            if tags:
-                filters["tags"] = CollectionFilter(values=tuple(tags))
+                if fdef.type == FieldType.DATE_RANGE:
+                    lo = _parse_date_min(raw.get("min")) if isinstance(raw, dict) else None
+                    hi = _parse_date_max(raw.get("max")) if isinstance(raw, dict) else None
+                    if lo is not None or hi is not None:
+                        predicate_filters[fdef.name] = RangeFilter(lo=lo, hi=hi)
 
-            if rating_min is not None or rating_max is not None:
-                filters["rating"] = RangeFilter(lo=rating_min, hi=rating_max)
+                elif fdef.type == FieldType.INT_RANGE:
+                    lo = raw.get("min") if isinstance(raw, dict) else None
+                    hi = raw.get("max") if isinstance(raw, dict) else None
+                    if lo is not None or hi is not None:
+                        predicate_filters[fdef.name] = RangeFilter(lo=lo, hi=hi)
 
-            if make is not None:
-                filters["make"] = StringFilter(value=make)
+                elif fdef.type == FieldType.STRING_COLLECTION:
+                    if isinstance(raw, list) and raw:
+                        predicate_filters[fdef.name] = CollectionFilter(values=tuple(raw))
 
-            if model is not None:
-                filters["model"] = StringFilter(value=model)
+                elif fdef.type == FieldType.STRING_MATCH:
+                    if isinstance(raw, str) and raw:
+                        predicate_filters[fdef.name] = StringFilter(value=raw)
 
-            predicate = SearchPredicate(filters=filters)
+                # GPS_BOX and DESCRIPTIVE: not yet implemented — silently ignored
+
+            predicate = SearchPredicate(filters=predicate_filters)
 
             partitions_done = 0
 
@@ -201,7 +250,7 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         "filePath": m.file_path,
     }
     if m.date_taken is not None:
-        d["dateTaken"] = m.date_taken.isoformat()
+        d["date"] = m.date_taken.isoformat()
     if m.rating is not None:
         d["rating"] = m.rating
     if m.tags:
