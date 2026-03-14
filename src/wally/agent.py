@@ -8,6 +8,7 @@ from datetime import datetime
 from mcp.server.fastmcp import Context
 
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.schema import LeafManifest, serialize_leaf, serialize_parent
 from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
@@ -78,6 +79,21 @@ class WallyAgent(AgentBase):
                     for fdef in PHOTO_FIELDS
                 ]
             }
+
+        @mcp.tool()
+        async def get_root_manifest_tool() -> dict:
+            """Return the root manifest of this backend as a plain dict.
+            Manifest contains the summary of each child partition
+                and an aggregated summary.
+            Returns ``{"unindexed": True}`` if no manifest exists yet.
+            """
+            try:
+                manifest, _ = await self.manifest_store.read_any("")
+            except FileNotFoundError:
+                return {"unindexed": True}
+            if isinstance(manifest, LeafManifest):
+                return serialize_leaf(manifest)
+            return serialize_parent(manifest)
 
         @mcp.tool()
         async def search_photos_tool(
