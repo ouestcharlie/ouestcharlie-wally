@@ -13,6 +13,7 @@ from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
     CollectionFilter,
+    GpsBoxFilter,
     PhotoMatch,
     RangeFilter,
     SearchPredicate,
@@ -65,7 +66,11 @@ class WallyAgent(AgentBase):
                 FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
                 FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
                 FieldType.STRING_MATCH: "string (case-insensitive substring match)",
-                FieldType.GPS_BOX: "not yet implemented",
+                FieldType.GPS_BOX: (
+                    '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
+                    "— decimal degrees bounding box; photos outside the box are excluded. "
+                    "All bounds optional (open-ended)."
+                ),
                 FieldType.DESCRIPTIVE: "not yet implemented",
             }
             return {
@@ -74,7 +79,7 @@ class WallyAgent(AgentBase):
                         "name": fdef.name,
                         "type": fdef.type.name,
                         "filterFormat": _FORMAT[fdef.type],
-                        "pruneable": fdef.summary_range,
+                        "pruneable": fdef.summary_range or fdef.summary_gps_bbox,
                     }
                     for fdef in PHOTO_FIELDS
                 ]
@@ -167,7 +172,18 @@ class WallyAgent(AgentBase):
                     if isinstance(raw, str) and raw:
                         predicate_filters[fdef.name] = StringFilter(value=raw)
 
-                # GPS_BOX and DESCRIPTIVE: not yet implemented — silently ignored
+                elif fdef.type == FieldType.GPS_BOX:
+                    if isinstance(raw, dict) and any(
+                        raw.get(k) is not None for k in ("minLat", "maxLat", "minLon", "maxLon")
+                    ):
+                        predicate_filters[fdef.name] = GpsBoxFilter(
+                            min_lat=raw.get("minLat"),
+                            max_lat=raw.get("maxLat"),
+                            min_lon=raw.get("minLon"),
+                            max_lon=raw.get("maxLon"),
+                        )
+
+                # DESCRIPTIVE: not yet implemented — silently ignored
 
             predicate = SearchPredicate(filters=predicate_filters)
 

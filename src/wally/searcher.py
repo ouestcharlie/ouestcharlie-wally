@@ -69,7 +69,22 @@ class StringFilter:
     value: str
 
 
-FilterValue = Union[RangeFilter, CollectionFilter, StringFilter]
+@dataclass(frozen=True)
+class GpsBoxFilter:
+    """Bounding box filter for GPS_BOX fields.
+
+    Only photos whose GPS point falls inside the box match.
+    All bounds are in decimal degrees. None means open-ended on that side.
+    A photo with no GPS data is always excluded when any bound is set.
+    """
+
+    min_lat: float | None = None
+    max_lat: float | None = None
+    min_lon: float | None = None
+    max_lon: float | None = None
+
+
+FilterValue = Union[RangeFilter, CollectionFilter, StringFilter, GpsBoxFilter]
 
 
 # ---------------------------------------------------------------------------
@@ -298,37 +313,56 @@ def _can_prune(
 ) -> bool:
     """Return True if this partition's summary proves no photo can match.
 
-    Iterates over range-typed fields in field_config. For each field that
-    has a RangeFilter in the predicate and known summary bounds, checks
-    whether the ranges are disjoint.
+    Dispatches on field type:
+    - DATE_RANGE / INT_RANGE: checks whether the filter range is disjoint from
+      the partition's min/max stats.
+    - GPS_BOX: checks whether the filter bounding box is disjoint from the
+      partition's GPS bbox stats.
 
     Conservative: if a summary bound is None (unknown), never prune on
-    that dimension. Non-range fields (STRING_COLLECTION, STRING_MATCH)
-    require full leaf scan — no summary pruning.
+    that dimension. STRING_COLLECTION and STRING_MATCH require full leaf scan.
     """
     for fdef in field_config:
-        if fdef.type not in (FieldType.DATE_RANGE, FieldType.INT_RANGE):
-            continue
         fv = predicate.filters.get(fdef.name)
-        if not isinstance(fv, RangeFilter):
+        if fv is None:
             continue
 
-        field_stat = getattr(summary, fdef.name) if fdef.summary_range else None
-        s_max = field_stat["max"] if field_stat else None
-        s_min = field_stat["min"] if field_stat else None
-        use_naive = fdef.type == FieldType.DATE_RANGE
+        if fdef.type in (FieldType.DATE_RANGE, FieldType.INT_RANGE) and isinstance(fv, RangeFilter):
+            field_stat = getattr(summary, fdef.name) if fdef.summary_range else None
+            s_max = field_stat["max"] if field_stat else None
+            s_min = field_stat["min"] if field_stat else None
+            use_naive = fdef.type == FieldType.DATE_RANGE
 
-        if fv.lo is not None and s_max is not None:
-            cmp_s_max = _naive(s_max) if use_naive else s_max
-            cmp_lo = _naive(fv.lo) if use_naive else fv.lo
-            if cmp_s_max < cmp_lo:
-                return True
+            if fv.lo is not None and s_max is not None:
+                cmp_s_max = _naive(s_max) if use_naive else s_max
+                cmp_lo = _naive(fv.lo) if use_naive else fv.lo
+                if cmp_s_max < cmp_lo:
+                    return True
 
-        if fv.hi is not None and s_min is not None:
-            cmp_s_min = _naive(s_min) if use_naive else s_min
-            cmp_hi = _naive(fv.hi) if use_naive else fv.hi
-            if cmp_s_min > cmp_hi:
-                return True
+            if fv.hi is not None and s_min is not None:
+                cmp_s_min = _naive(s_min) if use_naive else s_min
+                cmp_hi = _naive(fv.hi) if use_naive else fv.hi
+                if cmp_s_min > cmp_hi:
+                    return True
+
+        elif fdef.type is FieldType.GPS_BOX and isinstance(fv, GpsBoxFilter):
+            field_stat = getattr(summary, fdef.name, None)
+            if field_stat is None:
+                continue  # no bbox in summary — conservative, don't prune
+            p_min_lat = field_stat.get("minLat")
+            p_max_lat = field_stat.get("maxLat")
+            p_min_lon = field_stat.get("minLon")
+            p_max_lon = field_stat.get("maxLon")
+            if None in (p_min_lat, p_max_lat, p_min_lon, p_max_lon):
+                continue  # incomplete summary — conservative, don't prune
+            if fv.min_lat is not None and p_max_lat < fv.min_lat:
+                return True  # partition fully south of filter box
+            if fv.max_lat is not None and p_min_lat > fv.max_lat:
+                return True  # partition fully north of filter box
+            if fv.min_lon is not None and p_max_lon < fv.min_lon:
+                return True  # partition fully west of filter box
+            if fv.max_lon is not None and p_min_lon > fv.max_lon:
+                return True  # partition fully east of filter box
 
     return False
 
@@ -381,6 +415,20 @@ def _matches(
         elif isinstance(fv, StringFilter):
             # Case-insensitive substring; None entry is excluded.
             if entry_val is None or fv.value.lower() not in entry_val.lower():
+                return False
+
+        elif isinstance(fv, GpsBoxFilter):
+            # Point-in-bbox match; None entry (no GPS data) is excluded.
+            if entry_val is None:
+                return False
+            lat, lon = entry_val
+            if fv.min_lat is not None and lat < fv.min_lat:
+                return False
+            if fv.max_lat is not None and lat > fv.max_lat:
+                return False
+            if fv.min_lon is not None and lon < fv.min_lon:
+                return False
+            if fv.max_lon is not None and lon > fv.max_lon:
                 return False
 
     return True
