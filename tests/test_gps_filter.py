@@ -11,8 +11,7 @@ from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
     SCHEMA_VERSION,
     LeafManifest,
-    ParentManifest,
-    PartitionSummary,
+    ManifestSummary,
     PhotoEntry,
 )
 
@@ -41,7 +40,7 @@ def _entry(filename: str, lat: float | None, lon: float | None) -> PhotoEntry:
     return PhotoEntry(filename=filename, content_hash=f"sha256:{filename}", searchable=searchable)
 
 
-def _gps_summary(path: str, min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> PartitionSummary:
+def _gps_summary(path: str, min_lat: float, max_lat: float, min_lon: float, max_lon: float) -> ManifestSummary:
     stats: dict = {
         "gps": {
             "type": "gps_bbox",
@@ -51,25 +50,23 @@ def _gps_summary(path: str, min_lat: float, max_lat: float, min_lon: float, max_
             "maxLon": max_lon,
         }
     }
-    return PartitionSummary(path=path, _stats=stats)
+    return ManifestSummary(path=path, _stats=stats)
 
 
-async def _leaf(store: ManifestStore, partition: str, photos: list[PhotoEntry]) -> None:
+async def _leaf(
+    store: ManifestStore,
+    partition: str,
+    photos: list[PhotoEntry],
+    summary: ManifestSummary | None = None,
+) -> None:
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition=partition,
         photos=photos,
     )
     await store.create_leaf(manifest)
-
-
-async def _parent(store: ManifestStore, path: str, children: list[PartitionSummary]) -> None:
-    manifest = ParentManifest(
-        schema_version=SCHEMA_VERSION,
-        path=path,
-        children=children,
-    )
-    await store.create_parent(manifest)
+    ps = summary if summary is not None else ManifestSummary(path=partition, photo_count=len(photos))
+    await store.upsert_partition_in_summary(ps)
 
 
 # ---------------------------------------------------------------------------
@@ -148,8 +145,7 @@ async def test_disjoint_partition_pruned(store: ManifestStore, backend: LocalBac
     """Partition whose GPS bbox is fully outside the filter box is pruned."""
     # Child partition: Marseille area (south of France)
     child_summary = _gps_summary("south", min_lat=43.0, max_lat=44.0, min_lon=5.0, max_lon=6.0)
-    await _parent(store, "", [child_summary])
-    await _leaf(store, "south", [_entry("marseille.jpg", lat=43.3, lon=5.37)])
+    await _leaf(store, "south", [_entry("marseille.jpg", lat=43.3, lon=5.37)], summary=child_summary)
 
     result = await search_photos(
         backend,
@@ -166,8 +162,7 @@ async def test_overlapping_partition_not_pruned(store: ManifestStore, backend: L
     """Partition whose GPS bbox overlaps the filter box is not pruned."""
     # Child partition covers both Paris and Île-de-France broadly
     child_summary = _gps_summary("idf", min_lat=48.0, max_lat=49.5, min_lon=1.5, max_lon=3.5)
-    await _parent(store, "", [child_summary])
-    await _leaf(store, "idf", [_entry("paris.jpg", lat=48.85, lon=2.35)])
+    await _leaf(store, "idf", [_entry("paris.jpg", lat=48.85, lon=2.35)], summary=child_summary)
 
     result = await search_photos(
         backend,
@@ -181,9 +176,8 @@ async def test_overlapping_partition_not_pruned(store: ManifestStore, backend: L
 @pytest.mark.asyncio
 async def test_missing_partition_bbox_not_pruned(store: ManifestStore, backend: LocalBackend) -> None:
     """Partition without GPS bbox summary is never pruned (conservative)."""
-    no_gps_summary = PartitionSummary(path="legacy", _stats={})
-    await _parent(store, "", [no_gps_summary])
-    await _leaf(store, "legacy", [_entry("photo.jpg", lat=48.85, lon=2.35)])
+    no_gps_summary = ManifestSummary(path="legacy", _stats={})
+    await _leaf(store, "legacy", [_entry("photo.jpg", lat=48.85, lon=2.35)], summary=no_gps_summary)
 
     result = await search_photos(
         backend,
@@ -307,8 +301,7 @@ async def test_partition_bbox_touches_filter_box_not_pruned(
     """Partition bbox sharing a boundary with filter box is not pruned."""
     # Partition: lat [47, 48], lon [1, 2] — touches filter at lat=48, lon=2
     child_summary = _gps_summary("touching", min_lat=47.0, max_lat=48.0, min_lon=1.0, max_lon=2.0)
-    await _parent(store, "", [child_summary])
-    await _leaf(store, "touching", [_entry("border.jpg", lat=48.0, lon=2.0)])
+    await _leaf(store, "touching", [_entry("border.jpg", lat=48.0, lon=2.0)], summary=child_summary)
 
     result = await search_photos(
         backend,

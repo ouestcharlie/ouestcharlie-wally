@@ -1,6 +1,6 @@
 """Tests for the get_root_manifest_tool logic.
 
-The tool calls manifest_store.read_any("") then serializes the result.
+The tool calls manifest_store.read_summary() then serializes the result.
 Tests exercise that pipeline directly without going through the MCP layer.
 """
 
@@ -14,19 +14,15 @@ import pytest
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
     SCHEMA_VERSION,
-    LeafManifest,
-    ParentManifest,
-    PartitionSummary,
-    PhotoEntry,
-    serialize_leaf,
-    serialize_parent,
+    ManifestSummary,
+    RootSummary,
+    serialize_summary,
 )
 
 
 # ---------------------------------------------------------------------------
-# Helpers (mirrors test_searcher.py conventions)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
@@ -40,12 +36,8 @@ def store(backend: LocalBackend) -> ManifestStore:
     return ManifestStore(backend)
 
 
-def _entry(filename: str = "photo.jpg", content_hash: str = "sha256:aabbcc") -> PhotoEntry:
-    return PhotoEntry(filename=filename, content_hash=content_hash, searchable={})
-
-
-def _summary(path: str, photo_count: int = 1) -> PartitionSummary:
-    return PartitionSummary(path=path, _stats={})
+def _summary(path: str, photo_count: int = 1) -> ManifestSummary:
+    return ManifestSummary(path=path, photo_count=photo_count, _stats={})
 
 
 # ---------------------------------------------------------------------------
@@ -54,53 +46,50 @@ def _summary(path: str, photo_count: int = 1) -> PartitionSummary:
 
 
 @pytest.mark.asyncio
-async def test_unindexed_backend_returns_unindexed_flag(backend: LocalBackend) -> None:
-    """Missing root manifest → {"unindexed": True} (not an error)."""
-    store = ManifestStore(backend)
+async def test_unindexed_backend_returns_unindexed_flag(store: ManifestStore) -> None:
+    """Missing summary.json → {"unindexed": True} (not an error)."""
     try:
-        manifest, _ = await store.read_any("")
+        summary, _ = await store.read_summary()
     except FileNotFoundError:
         result = {"unindexed": True}
     else:
-        result = serialize_leaf(manifest) if isinstance(manifest, LeafManifest) else serialize_parent(manifest)
+        result = serialize_summary(summary)
 
     assert result == {"unindexed": True}
 
 
 # ---------------------------------------------------------------------------
-# get_root_manifest_tool — parent manifest at root
+# get_root_manifest_tool — indexed backend
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_parent_manifest_serialized(store: ManifestStore) -> None:
-    """Root parent manifest is returned with schemaVersion, path, and children."""
-    parent = ParentManifest(
+async def test_summary_serialized(store: ManifestStore) -> None:
+    """Root summary is returned with schemaVersion and partitions list."""
+    root_summary = RootSummary(
         schema_version=SCHEMA_VERSION,
-        path="",
-        children=[
+        partitions=[
             _summary("2024", photo_count=10),
             _summary("2023", photo_count=5),
         ],
     )
-    await store.create_parent(parent)
+    await store.create_summary(root_summary)
 
-    manifest, _ = await store.read_any("")
-    assert isinstance(manifest, ParentManifest)
-    result = serialize_parent(manifest)
+    summary, _ = await store.read_summary()
+    result = serialize_summary(summary)
 
     assert result["schemaVersion"] == SCHEMA_VERSION
-    assert result["path"] == ""
-    assert len(result["children"]) == 2
-    assert result["children"][0]["path"] == "2024"
-    assert result["children"][1]["path"] == "2023"
+    assert len(result["partitions"]) == 2
+    assert result["partitions"][0]["path"] == "2024"
+    assert result["partitions"][1]["path"] == "2023"
 
 
 @pytest.mark.asyncio
-async def test_parent_manifest_children_include_summary_stats(store: ManifestStore) -> None:
-    """Children with date stats are preserved in the serialized output."""
-    child = PartitionSummary(
+async def test_summary_partition_stats_preserved(store: ManifestStore) -> None:
+    """Partition with date stats is preserved in the serialized output."""
+    partition = ManifestSummary(
         path="2024",
+        photo_count=3,
         _stats={
             "dateTaken": {
                 "type": "date_range",
@@ -109,38 +98,12 @@ async def test_parent_manifest_children_include_summary_stats(store: ManifestSto
             },
         },
     )
-    parent = ParentManifest(schema_version=SCHEMA_VERSION, path="", children=[child])
-    await store.create_parent(parent)
+    root_summary = RootSummary(schema_version=SCHEMA_VERSION, partitions=[partition])
+    await store.create_summary(root_summary)
 
-    manifest, _ = await store.read_any("")
-    result = serialize_parent(manifest)  # type: ignore[arg-type]
+    summary, _ = await store.read_summary()
+    result = serialize_summary(summary)
 
-    child_dict = result["children"][0]
-    assert child_dict["path"] == "2024"
-    assert "dateTaken" in child_dict
-
-
-# ---------------------------------------------------------------------------
-# get_root_manifest_tool — leaf manifest at root (flat library)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_leaf_manifest_at_root_serialized(store: ManifestStore) -> None:
-    """Root leaf manifest (flat library) is returned with schemaVersion, partition, photos."""
-    photos = [
-        _entry("a.jpg", "sha256:aa"),
-        _entry("b.jpg", "sha256:bb"),
-    ]
-    leaf = LeafManifest(schema_version=SCHEMA_VERSION, partition="", photos=photos)
-    await store.create_leaf(leaf)
-
-    manifest, _ = await store.read_any("")
-    assert isinstance(manifest, LeafManifest)
-    result = serialize_leaf(manifest)
-
-    assert result["schemaVersion"] == SCHEMA_VERSION
-    assert result["partition"] == ""
-    assert len(result["photos"]) == 2
-    filenames = {p["filename"] for p in result["photos"]}
-    assert filenames == {"a.jpg", "b.jpg"}
+    p = result["partitions"][0]
+    assert p["path"] == "2024"
+    assert "dateTaken" in p

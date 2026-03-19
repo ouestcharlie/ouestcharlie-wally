@@ -3,8 +3,8 @@
 Pure async module — no MCP dependency. Independently testable.
 
 The search algorithm uses two-level pruning (per query_design.md):
-  1. Parent manifest summary pruning: skip subtrees whose range statistics
-     cannot contain any match (date, rating).
+  1. summary.json pruning: skip partitions whose range statistics cannot contain
+     any match (date, rating, GPS bbox).
   2. Leaf manifest scan: evaluate the full predicate per photo entry.
 
 The matching and pruning logic is driven by a field configuration (list[FieldDef])
@@ -28,8 +28,7 @@ from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
     LeafManifest,
-    ParentManifest,
-    PartitionSummary,
+    ManifestSummary,
 )
 
 _log = logging.getLogger(__name__)
@@ -164,14 +163,14 @@ async def search_photos(
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
     field_config: list[FieldDef] | None = None,
 ) -> SearchResult:
-    """Search all photos matching predicate, traversing from root.
+    """Search all photos matching predicate.
 
-    Reads the manifest tree starting at root, pruning parent subtrees
-    whose summary statistics exclude any possible match, then scanning
+    Reads summary.json from the backend root to get all partition summaries,
+    prunes partitions whose statistics exclude any possible match, then scans
     surviving leaf manifests entry by entry.
 
-    A missing manifest at root is treated as an unindexed library and
-    returns an empty result (not an error).
+    A missing summary.json is treated as an unindexed library and returns an
+    empty result (not an error).
 
     Args:
         backend:      Backend to search (read-only).
@@ -189,56 +188,54 @@ async def search_photos(
         field_config = PHOTO_FIELDS
     result = SearchResult()
     store = ManifestStore(backend)
-    await _traverse(store, root, predicate, result, on_progress, field_config)
-    return result
 
-
-# ---------------------------------------------------------------------------
-# Internal traversal
-# ---------------------------------------------------------------------------
-
-
-async def _traverse(
-    store: ManifestStore,
-    partition: str,
-    predicate: SearchPredicate,
-    result: SearchResult,
-    on_progress: Callable[[int, str], Awaitable[None]] | None,
-    field_config: list[FieldDef],
-) -> None:
-    """Recursive descent through the manifest tree."""
+    # Read the flat summary to get all partition summaries.
     try:
-        manifest, _version = await store.read_any(partition)
+        summary, _ = await store.read_summary()
     except FileNotFoundError:
-        _log.error("No manifest at %r", partition)
-        return
+        _log.info("No summary.json — library is unindexed, returning empty result")
+        return result
     except Exception as exc:
-        _log.error("Failed to read manifest at %r: %s", partition, exc)
+        _log.error("Failed to read summary.json: %s", exc)
         result.errors += 1
-        result.error_details.append(f"{partition}: {exc}")
-        return
+        result.error_details.append(f"summary.json: {exc}")
+        return result
 
-    if isinstance(manifest, ParentManifest):
-        await _handle_parent(manifest, store, predicate, result, on_progress, field_config)
-    else:
+    # Filter to the requested subtree if root is specified.
+    partitions_to_scan = summary.partitions
+    if root:
+        root_prefix = root.rstrip("/") + "/"
+        partitions_to_scan = [
+            p for p in summary.partitions
+            if p.path == root or p.path.startswith(root_prefix)
+        ]
+
+    # Prune by summary stats, then scan surviving leaf manifests.
+    for partition_summary in partitions_to_scan:
+        if _can_prune(partition_summary, predicate, field_config):
+            result.partitions_pruned += 1
+            _log.debug("Pruned partition %r (summary out of range)", partition_summary.path)
+            continue
+
+        try:
+            manifest, _ = await store.read_leaf(partition_summary.path)
+        except FileNotFoundError:
+            _log.warning(
+                "Partition %r in summary.json but manifest.json missing — skipping",
+                partition_summary.path,
+            )
+            result.errors += 1
+            result.error_details.append(f"{partition_summary.path}: manifest.json missing")
+            continue
+        except Exception as exc:
+            _log.error("Failed to read manifest for %r: %s", partition_summary.path, exc)
+            result.errors += 1
+            result.error_details.append(f"{partition_summary.path}: {exc}")
+            continue
+
         await _handle_leaf(manifest, predicate, result, on_progress, field_config)
 
-
-async def _handle_parent(
-    manifest: ParentManifest,
-    store: ManifestStore,
-    predicate: SearchPredicate,
-    result: SearchResult,
-    on_progress: Callable[[int, str], Awaitable[None]] | None,
-    field_config: list[FieldDef],
-) -> None:
-    """Process a parent manifest: prune children, recurse into survivors."""
-    for child in manifest.children:
-        if _can_prune(child, predicate, field_config):
-            result.partitions_pruned += 1
-            _log.debug("Pruned partition %r (summary out of range)", child.path)
-        else:
-            await _traverse(store, child.path, predicate, result, on_progress, field_config)
+    return result
 
 
 async def _handle_leaf(
@@ -307,7 +304,7 @@ def _naive(dt: datetime) -> datetime:
 
 
 def _can_prune(
-    summary: PartitionSummary,
+    summary: ManifestSummary,
     predicate: SearchPredicate,
     field_config: list[FieldDef],
 ) -> bool:

@@ -14,8 +14,7 @@ from ouestcharlie_toolkit.schema import (
     METADATA_DIR,
     SCHEMA_VERSION,
     LeafManifest,
-    ParentManifest,
-    PartitionSummary,
+    ManifestSummary,
     PhotoEntry,
     ThumbnailGridLayout,
     manifest_path,
@@ -81,18 +80,27 @@ def _summary(
     date_max: datetime | None = None,
     rating_min: int | None = None,
     rating_max: int | None = None,
-) -> PartitionSummary:
+) -> ManifestSummary:
     stats: dict = {}
     if date_min is not None or date_max is not None:
         stats["dateTaken"] = {"type": "date_range", "min": date_min, "max": date_max}
     if rating_min is not None or rating_max is not None:
         stats["rating"] = {"type": "int_range", "min": rating_min, "max": rating_max}
-    return PartitionSummary(path=path, _stats=stats)
+    return ManifestSummary(path=path, _stats=stats)
 
 
-async def _leaf(store: ManifestStore, partition: str, photos: list[PhotoEntry],
-                grid: ThumbnailGridLayout | None = None) -> None:
-    """Write a leaf manifest with the given photos."""
+async def _leaf(
+    store: ManifestStore,
+    partition: str,
+    photos: list[PhotoEntry],
+    grid: ThumbnailGridLayout | None = None,
+    summary: ManifestSummary | None = None,
+) -> None:
+    """Write a leaf manifest and register the partition in summary.json.
+
+    If ``summary`` is given its stats are used for pruning tests; otherwise a
+    minimal summary (path + photoCount) is written.
+    """
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition=partition,
@@ -100,16 +108,14 @@ async def _leaf(store: ManifestStore, partition: str, photos: list[PhotoEntry],
         thumbnail_grid=grid,
     )
     await store.create_leaf(manifest)
+    ps = summary if summary is not None else ManifestSummary(path=partition, photo_count=len(photos))
+    await store.upsert_partition_in_summary(ps)
 
 
-async def _parent(store: ManifestStore, path: str, children: list[PartitionSummary]) -> None:
-    """Write a parent manifest with the given child summaries."""
-    manifest = ParentManifest(
-        schema_version=SCHEMA_VERSION,
-        path=path,
-        children=children,
-    )
-    await store.create_parent(manifest)
+async def _write_summaries(store: ManifestStore, summaries: list[ManifestSummary]) -> None:
+    """Write partition summaries into summary.json (replaces _parent for pruning tests)."""
+    for s in summaries:
+        await store.upsert_partition_in_summary(s)
 
 
 # ---------------------------------------------------------------------------
@@ -328,15 +334,11 @@ async def test_parent_prunes_by_date_summary(
     store: ManifestStore, backend: LocalBackend, tmp_path: Path
 ) -> None:
     """Child partition whose date_max < date_min is pruned without reading its leaf."""
-    # Write two child leaves: one in 2022 (out of range), one in 2024 (in range).
-    await _leaf(store, "old", [_entry("old.jpg", "sha256:oo", datetime(2022, 6, 1))])
-    await _leaf(store, "new", [_entry("new.jpg", "sha256:nn", datetime(2024, 6, 1))])
-
-    # Write root parent manifest pointing to both children.
-    await _parent(store, "", [
-        _summary("old", date_min=datetime(2022, 1, 1), date_max=datetime(2022, 12, 31)),
-        _summary("new", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)),
-    ])
+    # Write two leaf partitions with explicit date summaries for pruning.
+    await _leaf(store, "old", [_entry("old.jpg", "sha256:oo", datetime(2022, 6, 1))],
+                summary=_summary("old", date_min=datetime(2022, 1, 1), date_max=datetime(2022, 12, 31)))
+    await _leaf(store, "new", [_entry("new.jpg", "sha256:nn", datetime(2024, 6, 1))],
+                summary=_summary("new", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)))
 
     result = await search_photos(
         backend,
@@ -352,14 +354,9 @@ async def test_parent_prunes_by_date_summary(
 async def test_parent_prunes_by_rating_summary(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """Child partition whose rating_max < rating_min is pruned."""
-    await _leaf(store, "low", [_entry("low.jpg", "sha256:ll", rating=2)])
-    await _leaf(store, "high", [_entry("high.jpg", "sha256:hh", rating=5)])
-
-    await _parent(store, "", [
-        _summary("low", rating_min=2, rating_max=2),
-        _summary("high", rating_min=5, rating_max=5),
-    ])
+    """Partition whose rating_max < rating_min filter is pruned."""
+    await _leaf(store, "low",  [_entry("low.jpg",  "sha256:ll", rating=2)], summary=_summary("low",  rating_min=2, rating_max=2))
+    await _leaf(store, "high", [_entry("high.jpg", "sha256:hh", rating=5)], summary=_summary("high", rating_min=5, rating_max=5))
 
     result = await search_photos(
         backend,
@@ -375,10 +372,7 @@ async def test_parent_conservative_with_none_summary_dates(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
     """A child with date_min=None/date_max=None is never pruned on date."""
-    await _leaf(store, "p", [_entry(date_taken=None)])
-    await _parent(store, "", [
-        _summary("p", date_min=None, date_max=None),
-    ])
+    await _leaf(store, "p", [_entry(date_taken=None)], summary=_summary("p", date_min=None, date_max=None))
 
     result = await search_photos(
         backend,
@@ -480,11 +474,13 @@ async def test_missing_root_manifest_returns_empty_result(backend: LocalBackend)
 
 @pytest.mark.asyncio
 async def test_corrupt_manifest_increments_error_count(
-    backend: LocalBackend, tmp_path: Path
+    store: ManifestStore, backend: LocalBackend, tmp_path: Path
 ) -> None:
-    """Corrupt JSON at a manifest path increments result.errors."""
+    """Corrupt manifest.json for a partition listed in summary.json increments errors."""
+    # Register partition "" in summary.json so the searcher tries to read its manifest.
+    await store.upsert_partition_in_summary(ManifestSummary(path="", photo_count=1))
+    # Now overwrite manifest.json with corrupt data.
     meta_dir = tmp_path / METADATA_DIR
-    meta_dir.mkdir(parents=True)
     (meta_dir / "manifest.json").write_bytes(b"not valid json }{")
 
     result = await search_photos(backend, SearchPredicate())
@@ -500,22 +496,14 @@ async def test_corrupt_manifest_increments_error_count(
 @pytest.mark.asyncio
 async def test_multi_partition_search(store: ManifestStore, backend: LocalBackend) -> None:
     """Results are aggregated across multiple leaf partitions."""
-    await _leaf(store, "2024/01", [
-        _entry("jan.jpg", "sha256:j1", datetime(2024, 1, 15)),
-    ])
+    await _leaf(store, "2024/01", [_entry("jan.jpg", "sha256:j1", datetime(2024, 1, 15))],
+                summary=_summary("2024/01", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 1, 31)))
     await _leaf(store, "2024/07", [
         _entry("jul1.jpg", "sha256:j2", datetime(2024, 7, 4)),
         _entry("jul2.jpg", "sha256:j3", datetime(2024, 7, 20)),
-    ])
-    await _leaf(store, "2023/12", [
-        _entry("dec.jpg", "sha256:d1", datetime(2023, 12, 25)),
-    ])
-    # Build a root parent pointing to the three partitions (simplified).
-    await _parent(store, "", [
-        _summary("2024/01", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 1, 31)),
-        _summary("2024/07", date_min=datetime(2024, 7, 1), date_max=datetime(2024, 7, 31)),
-        _summary("2023/12", date_min=datetime(2023, 12, 1), date_max=datetime(2023, 12, 31)),
-    ])
+    ], summary=_summary("2024/07", date_min=datetime(2024, 7, 1), date_max=datetime(2024, 7, 31)))
+    await _leaf(store, "2023/12", [_entry("dec.jpg", "sha256:d1", datetime(2023, 12, 25))],
+                summary=_summary("2023/12", date_min=datetime(2023, 12, 1), date_max=datetime(2023, 12, 31)))
 
     result = await search_photos(
         backend,
@@ -532,10 +520,6 @@ async def test_partitions_scanned_counter(store: ManifestStore, backend: LocalBa
     """partitions_scanned increments once per leaf manifest read."""
     await _leaf(store, "p1", [_entry("a.jpg", "sha256:aa")])
     await _leaf(store, "p2", [_entry("b.jpg", "sha256:bb")])
-    await _parent(store, "", [
-        _summary("p1"),
-        _summary("p2"),
-    ])
     result = await search_photos(backend, SearchPredicate())
     assert result.partitions_scanned == 2
 
@@ -675,8 +659,8 @@ async def test_preview_grid_fields_in_match(store: ManifestStore, backend: Local
         thumbnail_grid=thumb_grid,
         preview_grid=prev_grid,
     )
-    from ouestcharlie_toolkit.manifest import ManifestStore as MS
     await store.create_leaf(manifest)
+    await store.upsert_partition_in_summary(ManifestSummary(path="", photo_count=2))
 
     result = await search_photos(backend, SearchPredicate())
     m = next(x for x in result.matches if x.filename == "a.jpg")
@@ -711,11 +695,8 @@ async def test_root_parameter_limits_search_to_subtree(
 
 @pytest.mark.asyncio
 async def test_deep_nesting_traversal(store: ManifestStore, backend: LocalBackend) -> None:
-    """Traversal recurses through multiple levels of parent manifests."""
+    """A deeply nested partition is found via summary.json."""
     await _leaf(store, "A/B/C", [_entry("deep.jpg", "sha256:d1", date_taken=datetime(2024, 3, 1))])
-    await _parent(store, "A/B", [_summary("A/B/C", date_min=datetime(2024, 3, 1), date_max=datetime(2024, 3, 31))])
-    await _parent(store, "A",   [_summary("A/B",   date_min=datetime(2024, 3, 1), date_max=datetime(2024, 3, 31))])
-    await _parent(store, "",    [_summary("A",      date_min=datetime(2024, 3, 1), date_max=datetime(2024, 3, 31))])
 
     result = await search_photos(
         backend,
@@ -731,16 +712,11 @@ async def test_deep_nesting_traversal(store: ManifestStore, backend: LocalBacken
 async def test_deep_nesting_prunes_intermediate_parent(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """An intermediate parent whose summary is out-of-range is pruned (and its subtree skipped)."""
-    await _leaf(store, "recent/sub", [_entry("new.jpg", "sha256:n", date_taken=datetime(2024, 6, 1))])
-    await _leaf(store, "old/sub",    [_entry("old.jpg", "sha256:o", date_taken=datetime(2020, 6, 1))])
-
-    await _parent(store, "recent", [_summary("recent/sub", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31))])
-    await _parent(store, "old",    [_summary("old/sub",    date_min=datetime(2020, 1, 1), date_max=datetime(2020, 12, 31))])
-    await _parent(store, "", [
-        _summary("recent", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)),
-        _summary("old",    date_min=datetime(2020, 1, 1), date_max=datetime(2020, 12, 31)),
-    ])
+    """A partition whose summary is out-of-range is pruned directly via summary.json."""
+    await _leaf(store, "recent/sub", [_entry("new.jpg", "sha256:n", date_taken=datetime(2024, 6, 1))],
+                summary=_summary("recent/sub", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)))
+    await _leaf(store, "old/sub", [_entry("old.jpg", "sha256:o", date_taken=datetime(2020, 6, 1))],
+                summary=_summary("old/sub", date_min=datetime(2020, 1, 1), date_max=datetime(2020, 12, 31)))
 
     result = await search_photos(
         backend,
@@ -748,7 +724,6 @@ async def test_deep_nesting_prunes_intermediate_parent(
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
-    # "old" subtree pruned at root level; "old/sub" never visited
     assert result.partitions_pruned == 1
     assert result.partitions_scanned == 1
 
@@ -765,7 +740,6 @@ async def test_on_progress_called_for_each_leaf(
     """on_progress is called once per leaf manifest scanned."""
     await _leaf(store, "p1", [_entry("a.jpg", "sha256:a1")])
     await _leaf(store, "p2", [_entry("b.jpg", "sha256:b1")])
-    await _parent(store, "", [_summary("p1"), _summary("p2")])
 
     calls: list[tuple[int, str]] = []
 
