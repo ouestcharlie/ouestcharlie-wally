@@ -5,7 +5,7 @@
 Wally is the consumption agent for OuEstCharlie. It is **read-only**: it never reads XMP sidecars or writes manifests. Wally runs in two modes simultaneously:
 
 1. **MCP search server** — Woof keeps Wally running as a persistent sidecar (stdio MCP server) for the duration of the Woof session. Woof calls `search_photos_tool` in response to Claude tool calls and forwards results to the gallery UI.
-2. **HTTP server** — Wally binds a local HTTP server on startup and serves on-demand JPEG previews. On cache miss, it generates the JPEG by calling `image-proc` (Rust CLI) and caches the result at `{partition}/.ouestcharlie/previews/{content_hash}.jpg`. Subsequent requests are served directly from disk.
+2. **HTTP server** — Wally exposes a local HTTP server that serves thumbnail AVIF strips and on-demand JPEG previews. Both are read via the backend abstraction. On preview cache miss, it generates the JPEG by calling `image-proc` (Rust CLI) and caches the result at `{partition}/.ouestcharlie/previews/{content_hash}.jpg`. Subsequent requests are served from the backend cache.
 
 Wally is kept alive (not spawned per call) so its HTTP server remains available between MCP tool calls to serve preview requests from the gallery.
 
@@ -13,11 +13,12 @@ Wally is kept alive (not spawned per call) so its HTTP server remains available 
 
 ```
 src/wally/
-├── __main__.py     # Entry point — starts HTTP server, then runs stdio MCP server
+├── __main__.py     # Entry point — wraps MCP app in MediaMiddleware, then runs stdio MCP server
 ├── agent.py        # WallyAgent(AgentBase) — registers MCP tools, date parsing, result serialization
-├── http_server.py  # On-demand photo HTTP server (daemon threads + asyncio gen loop)
+├── http_server.py  # MediaMiddleware: pure-ASGI middleware for thumbnail and preview serving
 └── searcher.py     # Pure async search logic — no MCP dependency, independently testable
 tests/
+├── test_http_server.py
 └── test_searcher.py
 ```
 
@@ -55,45 +56,61 @@ tests/
 
 The `contentHash` field doubles as the preview JPEG identifier: the gallery constructs the preview URL as `http://127.0.0.1:<wally_port>/previews/<backend>/<partition>/<contentHash>.jpg` without needing a separate manifest field.
 
-## HTTP Preview Server
+## HTTP Media Server
 
 ### Architecture
 
-`http_server.py` starts two daemon threads before `mcp.run()`:
+`http_server.py` implements `MediaMiddleware`, a pure-ASGI middleware class. It wraps the MCP Starlette app and intercepts `/thumbnails/` and `/previews/` routes before they reach the MCP layer (which requires Bearer authentication). All file access goes through the backend abstraction (`ouestcharlie_toolkit.backend.Backend`), so the storage layer can be swapped without touching this class.
 
-1. **HTTP thread** (`wally-http`): `BaseHTTPRequestHandler` bound to `127.0.0.1` on the port specified by `WALLY_HTTP_PORT` (pre-assigned by Woof and stored in `config.json`).
-2. **Generation thread** (`wally-gen`): a dedicated `asyncio` event loop for running async preview generation coroutines without interfering with the MCP stdio loop.
+`MediaMiddleware` runs entirely in the asyncio event loop that drives the Starlette/MCP app — no daemon threads or secondary event loops.
 
 ### URL scheme
 
 ```
+GET /thumbnails/{backend_name}/{partition}/thumbnails.avif
 GET /previews/{backend_name}/{partition}/{content_hash}.jpg
 ```
 
-`{partition}` may contain slashes (e.g. `2024/2024-07`). The last path segment is `{content_hash}.jpg`; everything before it is the partition.
+`{partition}` may contain slashes (e.g. `2024/2024-07`). For previews, the last path segment is `{content_hash}.jpg`; everything before it is the partition.
 
 ### Request handling
 
+**Thumbnails:**
 ```
 request arrives
   │
-  ├─ cache hit?  → read bytes from disk → 200 response
+  ├─ wrong backend_name? → 404
   │
-  └─ cache miss → _ensure_preview(partition, content_hash)
-                      │
-                      ├─ already in-flight? → wait on threading.Event (dedup)
-                      │
-                      └─ new → run _generate_preview() in gen_loop
-                                    │
-                                    1. read_leaf(partition) → find PhotoEntry by content_hash
-                                    2. call generate_preview_jpeg(backend, partition, entry)
-                                       (stages photo → image-proc jpeg_preview → cache to disk)
-                                    3. signal threading.Event
-                      │
-                      └─ serve from disk → 200 response (or 503 on generation failure)
+  ├─ backend.read("{partition}/.ouestcharlie/thumbnails.avif")
+  │     ├─ FileNotFoundError → 404
+  │     └─ success → 200 image/avif
 ```
 
-A `threading.Lock` guards a `dict[str, threading.Event]` keyed by `"{partition}:{content_hash}"`. If two requests arrive simultaneously for the same photo, only one triggers generation; the other waits on the event.
+**Previews:**
+```
+request arrives
+  │
+  ├─ wrong backend_name? → 404
+  │
+  ├─ backend.exists("{partition}/.ouestcharlie/previews/{hash}.jpg")?
+  │     └─ no → _ensure_preview(partition, content_hash)
+  │                 │
+  │                 ├─ already in-flight? → wait on asyncio.Event (dedup)
+  │                 │
+  │                 └─ new → _generate_preview(backend, partition, content_hash)
+  │                               │
+  │                               1. ManifestStore.read_leaf(partition)
+  │                               2. find PhotoEntry by content_hash
+  │                               3. generate_preview_jpeg(backend, partition, entry)
+  │                                  (stages photo → image-proc jpeg_preview → backend write)
+  │                               4. signal asyncio.Event
+  │
+  ├─ backend.read("{partition}/.ouestcharlie/previews/{hash}.jpg")
+  │     ├─ FileNotFoundError → 503 (generation failed)
+  │     └─ success → 200 image/jpeg
+```
+
+An `asyncio.Lock` guards a `dict[str, asyncio.Event]` keyed by `"{partition}:{content_hash}"`. If two requests arrive simultaneously for the same photo, only one triggers generation; the other awaits the event with a 120 s timeout.
 
 ### Configuration
 
@@ -101,7 +118,7 @@ A `threading.Lock` guards a `dict[str, threading.Event]` keyed by `"{partition}:
 |---|---|---|
 | `WALLY_HTTP_PORT` | Injected by Woof | Port to bind; falls back to OS-assigned if absent |
 | `WALLY_BACKEND_NAME` | Injected by Woof | Validated against the `{backend_name}` URL segment |
-| `WOOF_BACKEND_CONFIG` | Injected by Woof | Backend root path for file access |
+| `WOOF_BACKEND_CONFIG` | Injected by Woof | JSON backend config (`{"type": "filesystem", "root": "..."}`) passed to `backend_from_config()` |
 
 ## Query Execution: Two-Level Pruning
 

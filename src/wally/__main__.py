@@ -31,7 +31,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from wally.agent import WallyAgent
-from wally.http_server import PreviewMiddleware
+from wally.http_server import MediaMiddleware
 
 
 class _BearerGuard(BaseHTTPMiddleware):
@@ -85,11 +85,11 @@ def main() -> None:
     # Layer the ASGI stack (innermost first):
     #   MCP app (Starlette, handles /mcp)
     #   → _BearerGuard (enforces auth on MCP requests)
-    #   → PreviewMiddleware (intercepts /previews/…, passes rest through)
+    #   → MadiaMiddleware (intercepts /previews/… and /thumbnails/..., passes rest through)
     mcp_app = agent.mcp.streamable_http_app()
     if agent_token:
         mcp_app = _BearerGuard(mcp_app, token=agent_token)
-    app = PreviewMiddleware(
+    app = MediaMiddleware(
         mcp_app,
         backend_config=agent.backend_config,
         backend_name=backend_name,

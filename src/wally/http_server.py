@@ -1,30 +1,35 @@
-"""Wally preview middleware — on-demand JPEG preview generation and serving.
+"""Wally media middleware — thumbnail and preview serving via the backend abstraction.
 
 URL scheme:
+  GET /thumbnails/{backend_name}/{partition}/thumbnails.avif
   GET /previews/{backend_name}/{partition}/{content_hash}.jpg
 
 Implemented as a pure-ASGI middleware that wraps the MCP app.  All I/O
-runs in the main asyncio event loop.  asyncio.Event deduplicates concurrent
-requests for the same photo so generation runs exactly once per cache miss.
+runs in the main asyncio event loop via the backend abstraction, which
+makes it trivial to switch from local filesystem to a remote backend.
+asyncio.Event deduplicates concurrent preview generation requests so
+generation runs exactly once per cache miss.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from pathlib import Path
 from urllib.parse import unquote
 from typing import Any
 
 _log = logging.getLogger(__name__)
 
 
-class PreviewMiddleware:
-    """ASGI middleware: handles /previews/… in-process; passes everything else through.
+class MediaMiddleware:
+    """ASGI middleware: handles /thumbnails/… and /previews/… in-process.
 
     Sits between the outer auth guard and the MCP Starlette app so that
-    preview requests bypass Bearer authentication (loopback-only, proxied
+    media requests bypass Bearer authentication (loopback-only, proxied
     by Woof which already holds the token).
+
+    All file access goes through the backend abstraction so the storage
+    layer can be swapped (local → remote) without touching this class.
     """
 
     def __init__(
@@ -34,10 +39,10 @@ class PreviewMiddleware:
         backend_config: dict,
         backend_name: str,
     ) -> None:
+        from ouestcharlie_toolkit.backend import backend_from_config
         self._app = app
-        self._backend_config = backend_config
+        self._backend = backend_from_config(backend_config)
         self._backend_name = backend_name
-        self._backend_root = Path(backend_config["root"])
         # asyncio.Lock() is safe to construct without a running loop in Python ≥ 3.11.
         self._lock = asyncio.Lock()
         self._in_progress: dict[str, asyncio.Event] = {}
@@ -47,6 +52,9 @@ class PreviewMiddleware:
             path = unquote(scope.get("path", ""))
             if path.startswith("/previews/"):
                 await self._handle_preview(path, send)
+                return
+            if path.startswith("/thumbnails/"):
+                await self._handle_thumbnail(path, send)
                 return
         await self._app(scope, receive, send)
 
@@ -67,19 +75,18 @@ class PreviewMiddleware:
         partition, hash_file = rest_parts
         content_hash = hash_file[:-4]  # strip ".jpg"
 
-        cache_path = (
-            self._backend_root / partition / ".ouestcharlie" / "previews" / hash_file
-        )
+        backend_path = f"{partition}/.ouestcharlie/previews/{hash_file}"
 
-        if not cache_path.exists():
+        if not await self._backend.exists(backend_path):
             await self._ensure_preview(partition, content_hash)
 
-        if not cache_path.exists():
-            _log.error("Preview not available after generation: %s", cache_path)
+        try:
+            data, _ = await self._backend.read(backend_path)
+        except FileNotFoundError:
+            _log.error("Preview not available after generation: %s", backend_path)
             await _send_error(send, 503)
             return
 
-        data = await asyncio.to_thread(cache_path.read_bytes)
         await send({
             "type": "http.response.start",
             "status": 200,
@@ -109,7 +116,7 @@ class PreviewMiddleware:
                 pass
             return
         try:
-            await _generate_preview(self._backend_config, partition, content_hash)
+            await _generate_preview(self._backend, partition, content_hash)
         except Exception as exc:
             _log.error(
                 "Preview generation failed — partition=%r hash=%r: %s",
@@ -120,6 +127,38 @@ class PreviewMiddleware:
                 del self._in_progress[key]
             event.set()
 
+    async def _handle_thumbnail(self, path: str, send: Any) -> None:
+        # path = "/thumbnails/{backend_name}/{partition}/thumbnails.avif"
+        parts = path.lstrip("/").split("/", 2)
+        if len(parts) < 3:
+            await _send_error(send, 404)
+            return
+        _, url_backend, rest = parts
+        if url_backend != self._backend_name:
+            await _send_error(send, 404)
+            return
+        rest_parts = rest.rsplit("/", 1)
+        if len(rest_parts) != 2 or rest_parts[1] != "thumbnails.avif":
+            await _send_error(send, 404)
+            return
+        partition = rest_parts[0]
+        backend_path = f"{partition}/.ouestcharlie/thumbnails.avif"
+        try:
+            data, _ = await self._backend.read(backend_path)
+        except FileNotFoundError:
+            await _send_error(send, 404)
+            return
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [
+                (b"content-type", b"image/avif"),
+                (b"content-length", str(len(data)).encode()),
+                (b"access-control-allow-origin", b"*"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": data})
+
 
 async def _send_error(send: Any, status: int) -> None:
     await send({"type": "http.response.start", "status": status, "headers": []})
@@ -127,16 +166,14 @@ async def _send_error(send: Any, status: int) -> None:
 
 
 async def _generate_preview(
-    backend_config: dict,
+    backend: Any,
     partition: str,
     content_hash: str,
 ) -> None:
     """Find the photo entry in the leaf manifest and generate its JPEG preview."""
-    from ouestcharlie_toolkit.backend import backend_from_config
     from ouestcharlie_toolkit.manifest import ManifestStore
     from ouestcharlie_toolkit.thumbnail_builder import generate_preview_jpeg
 
-    backend = backend_from_config(backend_config)
     manifest_store = ManifestStore(backend)
 
     leaf, _ = await manifest_store.read_leaf(partition)
