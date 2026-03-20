@@ -24,9 +24,6 @@ _log = logging.getLogger(__name__)
 class MediaMiddleware:
     """ASGI middleware: handles /thumbnails/… and /previews/… in-process.
 
-    Sits between the outer auth guard and the MCP Starlette app so that
-    media requests bypass Bearer authentication (loopback-only, proxied
-    by Woof which already holds the token).
 
     All file access goes through the backend abstraction so the storage
     layer can be swapped (local → remote) without touching this class.

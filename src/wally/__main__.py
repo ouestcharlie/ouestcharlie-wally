@@ -84,16 +84,16 @@ def main() -> None:
 
     # Layer the ASGI stack (innermost first):
     #   MCP app (Starlette, handles /mcp)
-    #   → _BearerGuard (enforces auth on MCP requests)
-    #   → MadiaMiddleware (intercepts /previews/… and /thumbnails/..., passes rest through)
+    #   → MediaMiddleware (intercepts /previews/… and /thumbnails/…)
+    #   → _BearerGuard (enforces auth on all routes, including media)
     mcp_app = agent.mcp.streamable_http_app()
-    if agent_token:
-        mcp_app = _BearerGuard(mcp_app, token=agent_token)
-    app = MediaMiddleware(
+    app: object = MediaMiddleware(
         mcp_app,
         backend_config=agent.backend_config,
         backend_name=backend_name,
     )
+    if agent_token:
+        app = _BearerGuard(app, token=agent_token)
 
     sock, port = _bind_free_port()
     asyncio.run(_serve(app, sock, port))

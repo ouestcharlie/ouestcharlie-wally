@@ -60,9 +60,19 @@ The `contentHash` field doubles as the preview JPEG identifier: the gallery cons
 
 ### Architecture
 
-`http_server.py` implements `MediaMiddleware`, a pure-ASGI middleware class. It wraps the MCP Starlette app and intercepts `/thumbnails/` and `/previews/` routes before they reach the MCP layer (which requires Bearer authentication). All file access goes through the backend abstraction (`ouestcharlie_toolkit.backend.Backend`), so the storage layer can be swapped without touching this class.
+`http_server.py` implements `MediaMiddleware`, a pure-ASGI middleware class. It intercepts `/thumbnails/` and `/previews/` routes and serves them via the backend abstraction; all other requests pass through to the inner MCP Starlette app.
 
-`MediaMiddleware` runs entirely in the asyncio event loop that drives the Starlette/MCP app — no daemon threads or secondary event loops.
+In `__main__.py` the ASGI stack is layered as (outermost first):
+
+```
+_BearerGuard        — enforces Bearer token auth on all routes
+  → MediaMiddleware — handles /thumbnails/… and /previews/…
+    → MCP app       — handles /mcp
+```
+
+`_BearerGuard` is only applied when `WOOF_AGENT_TOKEN` is set. When present, every request (MCP and media alike) must carry a matching `Authorization: Bearer <token>` header. Woof forwards this token when proxying media requests.
+
+`MediaMiddleware` runs entirely in the asyncio event loop that drives the Starlette/MCP app — no daemon threads or secondary event loops. All file access goes through the backend abstraction (`ouestcharlie_toolkit.backend.Backend`), so the storage layer can be swapped without touching this class.
 
 ### URL scheme
 
