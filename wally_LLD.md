@@ -2,22 +2,27 @@
 
 ## Overview
 
-Wally is the V1 consumption agent for OuEstCharlie. It is **stateless and read-only**: Woof launches it as a child process (MCP server over stdio), passes a structured search predicate via an MCP tool call, and Wally returns matching photo metadata by traversing the manifest tree. It never reads XMP sidecars or writes anything.
+Wally is the consumption agent for OuEstCharlie. It is **read-only**: it never reads XMP sidecars or writes manifests. Wally runs in two modes simultaneously:
 
-Woof invokes Wally in response to Claude tool calls (e.g., `search_photos`) and forwards results to the gallery UI.
+1. **MCP search server** — Woof keeps Wally running as a persistent sidecar (stdio MCP server) for the duration of the Woof session. Woof calls `search_photos_tool` in response to Claude tool calls and forwards results to the gallery UI.
+2. **HTTP server** — Wally binds a local HTTP server on startup and serves on-demand JPEG previews. On cache miss, it generates the JPEG by calling `image-proc` (Rust CLI) and caches the result at `{partition}/.ouestcharlie/previews/{content_hash}.jpg`. Subsequent requests are served directly from disk.
+
+Wally is kept alive (not spawned per call) so its HTTP server remains available between MCP tool calls to serve preview requests from the gallery.
 
 ## Repository Structure
 
 ```
 src/wally/
-├── __main__.py     # Entry point (stdio MCP server, adapts from Whitebeard pattern)
+├── __main__.py     # Entry point — starts HTTP server, then runs stdio MCP server
 ├── agent.py        # WallyAgent(AgentBase) — registers MCP tools, date parsing, result serialization
+├── http_server.py  # On-demand photo HTTP server (daemon threads + asyncio gen loop)
 └── searcher.py     # Pure async search logic — no MCP dependency, independently testable
 tests/
 └── test_searcher.py
 ```
 
-`searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers the tool with FastMCP and handles MCP-layer concerns (date string parsing, progress reporting, result dict serialization).
+`searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers tools with FastMCP and handles MCP-layer concerns (date string parsing, progress reporting, result dict serialization). 
+`http_server.py` runs independently of the MCP layer in its own daemon threads.
 
 ## MCP Tool Interface
 
@@ -46,7 +51,57 @@ tests/
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
 
-**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `filePath` (always present), `tileIndex`, `thumbnailsPath`, `thumbnailCols`, `thumbnailTileSize`, `previewsPath`, `previewCols`, `previewTileSize` (grid fields, present when a thumbnail/preview grid exists), plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`) — serialized by name using `FieldDef.name` as the JSON key.
+**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `filePath` (always present), `tileIndex`, `thumbnailsPath`, `thumbnailCols`, `thumbnailTileSize` (thumbnail grid fields, present when the partition has been thumbnailed), plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key.
+
+The `contentHash` field doubles as the preview JPEG identifier: the gallery constructs the preview URL as `http://127.0.0.1:<wally_port>/previews/<backend>/<partition>/<contentHash>.jpg` without needing a separate manifest field.
+
+## HTTP Preview Server
+
+### Architecture
+
+`http_server.py` starts two daemon threads before `mcp.run()`:
+
+1. **HTTP thread** (`wally-http`): `BaseHTTPRequestHandler` bound to `127.0.0.1` on the port specified by `WALLY_HTTP_PORT` (pre-assigned by Woof and stored in `config.json`).
+2. **Generation thread** (`wally-gen`): a dedicated `asyncio` event loop for running async preview generation coroutines without interfering with the MCP stdio loop.
+
+### URL scheme
+
+```
+GET /previews/{backend_name}/{partition}/{content_hash}.jpg
+```
+
+`{partition}` may contain slashes (e.g. `2024/2024-07`). The last path segment is `{content_hash}.jpg`; everything before it is the partition.
+
+### Request handling
+
+```
+request arrives
+  │
+  ├─ cache hit?  → read bytes from disk → 200 response
+  │
+  └─ cache miss → _ensure_preview(partition, content_hash)
+                      │
+                      ├─ already in-flight? → wait on threading.Event (dedup)
+                      │
+                      └─ new → run _generate_preview() in gen_loop
+                                    │
+                                    1. read_leaf(partition) → find PhotoEntry by content_hash
+                                    2. call generate_preview_jpeg(backend, partition, entry)
+                                       (stages photo → image-proc jpeg_preview → cache to disk)
+                                    3. signal threading.Event
+                      │
+                      └─ serve from disk → 200 response (or 503 on generation failure)
+```
+
+A `threading.Lock` guards a `dict[str, threading.Event]` keyed by `"{partition}:{content_hash}"`. If two requests arrive simultaneously for the same photo, only one triggers generation; the other waits on the event.
+
+### Configuration
+
+| Env var | Source | Purpose |
+|---|---|---|
+| `WALLY_HTTP_PORT` | Injected by Woof | Port to bind; falls back to OS-assigned if absent |
+| `WALLY_BACKEND_NAME` | Injected by Woof | Validated against the `{backend_name}` URL segment |
+| `WOOF_BACKEND_CONFIG` | Injected by Woof | Backend root path for file access |
 
 ## Query Execution: Two-Level Pruning
 
@@ -132,18 +187,28 @@ V1: results are returned in manifest traversal order — alphabetical by partiti
 
 ## Error Handling
 
-| Situation | Behaviour |
+| Situation | Behavior |
 |---|---|
 | No manifest at root | Empty `SearchResult`, `errors == 0` (unindexed library) |
 | No manifest at a child path | Silent skip (partition not yet indexed) |
 | Corrupt/invalid JSON | `errors += 1`, message in `error_details`, traversal continues |
 | Progress notification failure | Caught and logged at DEBUG; search continues |
 
+## MCP Tools Summary
+
+| Tool | Description |
+|---|---|
+| `search_photos_tool` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
+| `list_search_fields_tool` | Return all queryable fields with types and filter formats |
+| `get_root_manifest_tool` | Return the root summary (all indexed partitions with statistics) |
+| `get_http_port_tool` | Return the port Wally's HTTP preview server is listening on (diagnostic) |
+
 ## Scope and Deferred Items
 
 **In scope:**
 - Predicates: date range, tags (AND, full scan), rating range, camera make/model substring
 - Single backend per Woof invocation
+- On-demand JPEG preview generation and caching
 - No result pagination
 - No manifest caching (Woof concern — OP-Q5)
 

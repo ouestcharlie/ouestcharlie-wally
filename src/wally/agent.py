@@ -26,8 +26,9 @@ class WallyAgent(AgentBase):
     """Wally: searches the photo library by traversing manifests.
 
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
-    launching). Exposes two MCP tools:
+    launching). Exposes MCP tools:
     - ``list_search_fields_tool``: returns all queryable fields with types and formats.
+    - ``get_root_manifest_tool``: returns the root summary for the backend.
     - ``search_photos_tool``: searches photos using a generic ``filters`` dict driven
       by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
 
@@ -36,6 +37,7 @@ class WallyAgent(AgentBase):
 
     def __init__(self) -> None:
         super().__init__("wally", version="0.1.0")
+        self._http_port: int | None = None
         self._register_tools()
 
     def _register_tools(self) -> None:
