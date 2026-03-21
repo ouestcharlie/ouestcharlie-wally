@@ -147,6 +147,8 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
+            _check_filters(filters)
+
             predicate_filters: dict = {}
 
             for fdef in PHOTO_FIELDS:
@@ -217,6 +219,28 @@ class WallyAgent(AgentBase):
                 "errors": result.errors,
                 "errorDetails": result.error_details,
             }
+
+
+# ---------------------------------------------------------------------------
+# Filter validation
+# ---------------------------------------------------------------------------
+
+
+def _check_filters(filters: dict | None) -> None:
+    """Raise ValueError if *filters* contains any key not in PHOTO_FIELDS.
+
+    Prevents clients from sending invented field names that would be silently
+    ignored.
+    """
+    if not filters:
+        return
+    known = {fdef.name for fdef in PHOTO_FIELDS}
+    unknown = sorted(k for k in filters if k not in known)
+    if unknown:
+        raise ValueError(
+            f"Unknown filter field(s): {', '.join(unknown)}. "
+            "Call list_search_fields_tool to discover available fields."
+        )
 
 
 # ---------------------------------------------------------------------------
