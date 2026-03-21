@@ -26,9 +26,9 @@ from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
-    METADATA_DIR,
     LeafManifest,
     ManifestSummary,
+    thumbnail_avif_path,
 )
 
 _log = logging.getLogger(__name__)
@@ -127,14 +127,11 @@ class PhotoMatch:
     content_hash: str
     searchable: dict[str, Any]  # keyed by FieldDef.entry_attr
 
-    # Thumbnail grid location (None when no grid exists for this partition)
+    # Thumbnail tile location (None when no thumbnails exist for this photo)
     tile_index: int | None
-    thumbnails_path: str | None      # relative path to thumbnails.avif
-    thumbnail_cols: int | None       # columns in the thumbnail AVIF grid
+    avif_path: str | None            # backend-relative path to the chunk AVIF file
+    thumbnail_cols: int | None       # columns in the AVIF grid
     thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
-    previews_path: str | None        # relative path to previews.avif
-    preview_cols: int | None         # columns in the preview AVIF grid
-    preview_tile_size: int | None    # tile edge in pixels (tiles are square)
 
     # Path for "open with Finder / file system"
     file_path: str  # partition + "/" + filename, relative to backend root
@@ -248,40 +245,27 @@ async def _handle_leaf(
     """Scan a leaf manifest, appending each matching entry to result."""
     result.partitions_scanned += 1
 
-    # Build O(1) tile-index lookups by inverting photo_order once per manifest.
-    thumb_index: dict[str, int] = {}
-    if manifest.thumbnail_grid is not None:
-        thumb_index = {h: i for i, h in enumerate(manifest.thumbnail_grid.photo_order)}
-
-    preview_index: dict[str, int] = {}
-    if manifest.preview_grid is not None:
-        preview_index = {h: i for i, h in enumerate(manifest.preview_grid.photo_order)}
-
-    thumbnails_path = _avif_path(manifest.partition, "thumbnails.avif") \
-        if manifest.thumbnail_grid is not None else None
-    thumbnail_cols = manifest.thumbnail_grid.cols if manifest.thumbnail_grid is not None else None
-    thumbnail_tile_size = manifest.thumbnail_grid.tile_size if manifest.thumbnail_grid is not None else None
-    previews_path = _avif_path(manifest.partition, "previews.avif") \
-        if manifest.preview_grid is not None else None
-    preview_cols = manifest.preview_grid.cols if manifest.preview_grid is not None else None
-    preview_tile_size = manifest.preview_grid.tile_size if manifest.preview_grid is not None else None
+    # Build O(1) chunk-aware lookup: content_hash → (avif_path, tile_index, cols, tile_size)
+    thumb_lookup: dict[str, tuple[str, int, int, int]] = {}
+    for chunk in manifest.thumbnail_chunks:
+        chunk_path = thumbnail_avif_path(manifest.partition, chunk.avif_hash)
+        for i, h in enumerate(chunk.grid.photo_order):
+            thumb_lookup[h] = (chunk_path, i, chunk.grid.cols, chunk.grid.tile_size)
 
     for entry in manifest.photos:
         if not _matches(entry, predicate, field_config):
             continue
+        thumb = thumb_lookup.get(entry.content_hash)
         result.matches.append(
             PhotoMatch(
                 partition=manifest.partition,
                 filename=entry.filename,
                 content_hash=entry.content_hash,
                 searchable=dict(entry.searchable),
-                tile_index=thumb_index.get(entry.content_hash),
-                thumbnails_path=thumbnails_path,
-                thumbnail_cols=thumbnail_cols,
-                thumbnail_tile_size=thumbnail_tile_size,
-                previews_path=previews_path,
-                preview_cols=preview_cols,
-                preview_tile_size=preview_tile_size,
+                tile_index=thumb[1] if thumb else None,
+                avif_path=thumb[0] if thumb else None,
+                thumbnail_cols=thumb[2] if thumb else None,
+                thumbnail_tile_size=thumb[3] if thumb else None,
                 file_path=_file_path(manifest.partition, entry.filename),
             )
         )
@@ -435,11 +419,6 @@ def _matches(
 # Path helpers
 # ---------------------------------------------------------------------------
 
-
-def _avif_path(partition: str, filename: str) -> str:
-    """Relative path to an AVIF container inside a partition's metadata dir."""
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{METADATA_DIR}/{filename}"
 
 
 def _file_path(partition: str, filename: str) -> str:

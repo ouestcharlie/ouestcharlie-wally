@@ -16,6 +16,7 @@ from ouestcharlie_toolkit.schema import (
     LeafManifest,
     ManifestSummary,
     PhotoEntry,
+    ThumbnailChunk,
     ThumbnailGridLayout,
     manifest_path,
 )
@@ -93,7 +94,7 @@ async def _leaf(
     store: ManifestStore,
     partition: str,
     photos: list[PhotoEntry],
-    grid: ThumbnailGridLayout | None = None,
+    chunks: list[ThumbnailChunk] | None = None,
     summary: ManifestSummary | None = None,
 ) -> None:
     """Write a leaf manifest and register the partition in summary.json.
@@ -105,7 +106,7 @@ async def _leaf(
         schema_version=SCHEMA_VERSION,
         partition=partition,
         photos=photos,
-        thumbnail_grid=grid,
+        thumbnail_chunks=chunks or [],
     )
     await store.create_leaf(manifest)
     ps = summary if summary is not None else ManifestSummary(path=partition, photo_count=len(photos))
@@ -394,18 +395,20 @@ async def test_parent_conservative_with_none_summary_dates(
 async def test_tile_index_computed_correctly(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """tile_index reflects the photo's position in thumbnail_grid.photo_order."""
+    """tile_index reflects the photo's position in the chunk's grid.photo_order."""
     photos = [
         _entry("a.jpg", "sha256:aaa", datetime(2024, 1, 1)),
         _entry("b.jpg", "sha256:bbb", datetime(2024, 1, 2)),
         _entry("c.jpg", "sha256:ccc", datetime(2024, 1, 3)),
     ]
-    grid = ThumbnailGridLayout(
-        cols=3, rows=1, tile_size=256,
-        # Sorted by content_hash ascending — matching stable ordering
-        photo_order=["sha256:aaa", "sha256:bbb", "sha256:ccc"],
+    chunk = ThumbnailChunk(
+        avif_hash="HASH22CHARSEXAMPLE" + "XXXX",
+        grid=ThumbnailGridLayout(
+            cols=3, rows=1, tile_size=256,
+            photo_order=["sha256:aaa", "sha256:bbb", "sha256:ccc"],
+        ),
     )
-    await _leaf(store, "", photos, grid=grid)
+    await _leaf(store, "", photos, chunks=[chunk])
 
     result = await search_photos(
         backend,
@@ -417,10 +420,10 @@ async def test_tile_index_computed_correctly(
 
 
 @pytest.mark.asyncio
-async def test_tile_index_none_when_no_thumbnail_grid(
+async def test_tile_index_none_when_no_thumbnail_chunks(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """tile_index is None when the leaf manifest has no thumbnail_grid."""
+    """tile_index is None when the leaf manifest has no thumbnail_chunks."""
     await _leaf(store, "", [_entry()])
     result = await search_photos(backend, SearchPredicate())
     assert result.matches[0].tile_index is None
@@ -432,15 +435,19 @@ async def test_tile_index_none_when_no_thumbnail_grid(
 
 
 @pytest.mark.asyncio
-async def test_thumbnails_path_formed_correctly(
+async def test_avif_path_propagated_to_match(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """thumbnails_path points to the AVIF container inside the metadata dir."""
-    grid = ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:aa"])
-    await _leaf(store, "2024/07", [_entry("photo.jpg", "sha256:aa")], grid=grid)
+    """avif_path on PhotoMatch points to the specific chunk AVIF file."""
+    avif_path = f"2024/07/{METADATA_DIR}/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+    chunk = ThumbnailChunk(
+        avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:aa"]),
+    )
+    await _leaf(store, "2024/07", [_entry("photo.jpg", "sha256:aa")], chunks=[chunk])
     result = await search_photos(backend, SearchPredicate(), root="2024/07")
     assert len(result.matches) == 1
-    assert result.matches[0].thumbnails_path == f"2024/07/{METADATA_DIR}/thumbnails.avif"
+    assert result.matches[0].avif_path == avif_path
 
 
 @pytest.mark.asyncio
@@ -645,29 +652,32 @@ async def test_date_filter_strips_timezone(store: ManifestStore, backend: LocalB
 
 
 @pytest.mark.asyncio
-async def test_preview_grid_fields_in_match(store: ManifestStore, backend: LocalBackend) -> None:
-    """PhotoMatch exposes preview grid fields when preview_grid is present."""
-    thumb_grid = ThumbnailGridLayout(cols=2, rows=1, tile_size=256, photo_order=["sha256:a", "sha256:b"])
-    prev_grid  = ThumbnailGridLayout(cols=2, rows=1, tile_size=1024, photo_order=["sha256:a", "sha256:b"])
+async def test_multi_chunk_tile_lookup(store: ManifestStore, backend: LocalBackend) -> None:
+    """Photos in different chunks get the correct avif_path and tile_index."""
+    chunk_a = ThumbnailChunk(
+        avif_hash="AAAA",
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:a"]),
+    )
+    chunk_b = ThumbnailChunk(
+        avif_hash="BBBB",
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:b"]),
+    )
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition="",
-        photos=[
-            _entry("a.jpg", "sha256:a"),
-            _entry("b.jpg", "sha256:b"),
-        ],
-        thumbnail_grid=thumb_grid,
-        preview_grid=prev_grid,
+        photos=[_entry("a.jpg", "sha256:a"), _entry("b.jpg", "sha256:b")],
+        thumbnail_chunks=[chunk_a, chunk_b],
     )
     await store.create_leaf(manifest)
     await store.upsert_partition_in_summary(ManifestSummary(path="", photo_count=2))
 
     result = await search_photos(backend, SearchPredicate())
-    m = next(x for x in result.matches if x.filename == "a.jpg")
-    assert m.previews_path == f"{METADATA_DIR}/previews.avif"
-    assert m.preview_cols == 2
-    assert m.preview_tile_size == 1024
-    assert m.tile_index == 0   # position in thumbnail photo_order
+    ma = next(x for x in result.matches if x.filename == "a.jpg")
+    mb = next(x for x in result.matches if x.filename == "b.jpg")
+    assert ma.avif_path == f"{METADATA_DIR}/thumbnails-AAAA.avif"
+    assert ma.tile_index == 0
+    assert mb.avif_path == f"{METADATA_DIR}/thumbnails-BBBB.avif"
+    assert mb.tile_index == 0
 
 
 # ---------------------------------------------------------------------------

@@ -125,21 +125,22 @@ class MediaMiddleware:
             event.set()
 
     async def _handle_thumbnail(self, path: str, send: Any) -> None:
-        # path = "/thumbnails/{backend_name}/{partition}/thumbnails.avif"
+        # path = "/thumbnails/{backend_name}/{avif_path}"
+        # where avif_path is the backend-relative path, e.g.:
+        #   "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
         parts = path.lstrip("/").split("/", 2)
         if len(parts) < 3:
             await _send_error(send, 404)
             return
-        _, url_backend, rest = parts
+        _, url_backend, backend_path = parts
         if url_backend != self._backend_name:
             await _send_error(send, 404)
             return
-        rest_parts = rest.rsplit("/", 1)
-        if len(rest_parts) != 2 or rest_parts[1] != "thumbnails.avif":
+        filename = backend_path.rsplit("/", 1)[-1]
+        if not (filename.startswith("thumbnails-") or filename.startswith("previews-")) \
+                or not filename.endswith(".avif"):
             await _send_error(send, 404)
             return
-        partition = rest_parts[0]
-        backend_path = f"{partition}/.ouestcharlie/thumbnails.avif"
         try:
             data, _ = await self._backend.read(backend_path)
         except FileNotFoundError:

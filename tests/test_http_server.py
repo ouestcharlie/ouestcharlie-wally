@@ -27,11 +27,15 @@ def _make_app(backend_root: Path) -> MediaMiddleware:
     )
 
 
+_CHUNK_HASH = "Kf3QzA2_nBcR8xYvLm1P9w"
+_AVIF_FILENAME = f"thumbnails-{_CHUNK_HASH}.avif"
+
+
 @pytest.fixture()
 def backend_root(tmp_path: Path) -> Path:
     partition = tmp_path / "2024" / "2024-07" / ".ouestcharlie"
     partition.mkdir(parents=True)
-    (partition / "thumbnails.avif").write_bytes(FAKE_AVIF)
+    (partition / _AVIF_FILENAME).write_bytes(FAKE_AVIF)
     return tmp_path
 
 
@@ -40,7 +44,7 @@ async def test_thumbnail_served(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-07/thumbnails.avif")
+        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}")
     assert resp.status_code == 200
     assert resp.content == FAKE_AVIF
     assert resp.headers["content-type"] == "image/avif"
@@ -51,7 +55,7 @@ async def test_thumbnail_wrong_backend_returns_404(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get("/thumbnails/wronglib/2024/2024-07/thumbnails.avif")
+        resp = await client.get(f"/thumbnails/wronglib/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}")
     assert resp.status_code == 404
 
 
@@ -60,5 +64,5 @@ async def test_thumbnail_missing_file_returns_404(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-08/thumbnails.avif")
+        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-08/.ouestcharlie/{_AVIF_FILENAME}")
     assert resp.status_code == 404
