@@ -22,21 +22,26 @@ tests/
 
 `searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers the tool with FastMCP and handles date string parsing and result serialization.
 
-## Setup
+## Installation
 
-Requires sibling repositories:
-
-```
-../ouestcharlie-py-toolkit/
-```
+### From PyPI (recommended)
 
 ```bash
-cd ouestcharlie-wally
+pip install wally
+```
+
+### From source (development)
+
+Requires the sibling `ouestcharlie-py-toolkit` repo:
+
+```bash
 uv venv
 uv sync
 ```
 
 ## Running Tests
+
+**Always use `.venv/bin/python -m pytest`:**
 
 ```bash
 .venv/bin/python -m pytest tests/ -v
