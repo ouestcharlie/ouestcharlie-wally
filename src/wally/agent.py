@@ -7,6 +7,7 @@ from datetime import datetime
 
 from mcp.server.fastmcp import Context
 
+from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.schema import serialize_summary
 from ouestcharlie_toolkit.server import AgentBase
@@ -196,14 +197,7 @@ class WallyAgent(AgentBase):
             async def _on_progress(count: int, partition: str) -> None:
                 nonlocal partitions_done
                 partitions_done = count
-                try:
-                    await ctx.report_progress(
-                        progress=count,
-                        total=count + 1,  # total unknown; +1 keeps progress < 1.0
-                        message=f"scanned {partition}",
-                    )
-                except Exception:
-                    pass  # client may have disconnected; continue searching
+                await report_progress(ctx, count, count + 1, f"scanned {partition}")
 
             result = await search_photos(
                 self.backend,
