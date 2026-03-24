@@ -29,7 +29,7 @@ class WallyAgent(AgentBase):
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
     launching). Exposes MCP tools:
     - ``list_search_fields_tool``: returns all queryable fields with types and formats.
-    - ``get_root_manifest_tool``: returns the root summary for the backend.
+    - ``get_partition_summaries``: returns the root summary for the backend.
     - ``search_photos_tool``: searches photos using a generic ``filters`` dict driven
       by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
 
@@ -89,7 +89,7 @@ class WallyAgent(AgentBase):
             }
 
         @mcp.tool()
-        async def get_root_manifest_tool() -> dict:
+        async def get_partition_summaries() -> dict:
             """Return the root summary of this backend as a plain dict.
 
             The summary contains a flat list of all indexed partitions with

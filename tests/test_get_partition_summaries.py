@@ -1,4 +1,4 @@
-"""Tests for the get_root_manifest_tool logic.
+"""Tests for the get_partition_summaries logic.
 
 The tool calls manifest_store.read_summary() then serializes the result.
 Tests exercise that pipeline directly without going through the MCP layer.
@@ -41,7 +41,7 @@ def _summary(path: str, photo_count: int = 1) -> ManifestSummary:
 
 
 # ---------------------------------------------------------------------------
-# get_root_manifest_tool — unindexed backend
+# get_partition_summaries — unindexed backend
 # ---------------------------------------------------------------------------
 
 
@@ -59,7 +59,7 @@ async def test_unindexed_backend_returns_unindexed_flag(store: ManifestStore) ->
 
 
 # ---------------------------------------------------------------------------
-# get_root_manifest_tool — indexed backend
+# get_partition_summaries — indexed backend
 # ---------------------------------------------------------------------------
 
 

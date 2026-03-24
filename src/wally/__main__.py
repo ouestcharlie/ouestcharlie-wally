@@ -64,8 +64,8 @@ async def _serve(app: object, sock: socket.socket, port: int) -> None:
 
     config = uvicorn.Config(
         app,  # type: ignore[arg-type]
-        log_level="warning",
-        access_log=False,
+        log_level="info",
+        access_log=True,
     )
     server = uvicorn.Server(config)
 

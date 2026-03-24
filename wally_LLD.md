@@ -227,7 +227,7 @@ V1: results are returned in manifest traversal order — alphabetical by partiti
 |---|---|
 | `search_photos_tool` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
 | `list_search_fields_tool` | Return all queryable fields with types and filter formats |
-| `get_root_manifest_tool` | Return the root summary (all indexed partitions with statistics) |
+| `get_partition_summaries` | Return the root summary (all indexed partitions with statistics) |
 | `get_http_port_tool` | Return the port Wally's HTTP preview server is listening on (diagnostic) |
 
 ## Scope and Deferred Items
