@@ -18,9 +18,10 @@ Wally is read-only — it never writes to manifests or XMP sidecars.
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Union
+from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
@@ -83,7 +84,7 @@ class GpsBoxFilter:
     max_lon: float | None = None
 
 
-FilterValue = Union[RangeFilter, CollectionFilter, StringFilter, GpsBoxFilter]
+FilterValue = RangeFilter | CollectionFilter | StringFilter | GpsBoxFilter
 
 
 # ---------------------------------------------------------------------------
@@ -129,8 +130,8 @@ class PhotoMatch:
 
     # Thumbnail tile location (None when no thumbnails exist for this photo)
     tile_index: int | None
-    avif_path: str | None            # backend-relative path to the chunk AVIF file
-    thumbnail_cols: int | None       # columns in the AVIF grid
+    avif_path: str | None  # backend-relative path to the chunk AVIF file
+    thumbnail_cols: int | None  # columns in the AVIF grid
     thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
 
     # Path for "open with Finder / file system"
@@ -142,8 +143,8 @@ class SearchResult:
     """Aggregated result of a search_photos call."""
 
     matches: list[PhotoMatch] = field(default_factory=list)
-    partitions_scanned: int = 0   # leaf manifests fully evaluated
-    partitions_pruned: int = 0    # subtrees skipped by summary stats
+    partitions_scanned: int = 0  # leaf manifests fully evaluated
+    partitions_pruned: int = 0  # subtrees skipped by summary stats
     errors: int = 0
     error_details: list[str] = field(default_factory=list)
 
@@ -203,8 +204,7 @@ async def search_photos(
     if root:
         root_prefix = root.rstrip("/") + "/"
         partitions_to_scan = [
-            p for p in summary.partitions
-            if p.path == root or p.path.startswith(root_prefix)
+            p for p in summary.partitions if p.path == root or p.path.startswith(root_prefix)
         ]
 
     # Prune by summary stats, then scan surviving leaf manifests.
@@ -418,7 +418,6 @@ def _matches(
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
-
 
 
 def _file_path(partition: str, filename: str) -> str:

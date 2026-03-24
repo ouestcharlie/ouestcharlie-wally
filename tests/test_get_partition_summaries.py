@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
@@ -19,7 +18,6 @@ from ouestcharlie_toolkit.schema import (
     RootSummary,
     serialize_summary,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -6,7 +6,6 @@ import calendar
 from datetime import datetime
 
 from mcp.server.fastmcp import Context
-
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.schema import serialize_summary
@@ -67,7 +66,9 @@ class WallyAgent(AgentBase):
                     'partial dates supported: "2024", "2024-07", "2024-07-14")'
                 ),
                 FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
-                FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
+                FieldType.STRING_COLLECTION: (
+                    "list of strings (AND semantics — all must be present)"
+                ),
                 FieldType.STRING_MATCH: "string (case-insensitive substring match)",
                 FieldType.GPS_BOX: (
                     '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '

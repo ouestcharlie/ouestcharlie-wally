@@ -9,13 +9,13 @@ import pytest
 
 from wally.http_server import MediaMiddleware
 
-
 BACKEND_NAME = "testlib"
 FAKE_AVIF = b"AVIF_FAKE_DATA"
 
 
 def _make_app(backend_root: Path) -> MediaMiddleware:
     """Wrap a no-op ASGI app in MediaMiddleware pointed at backend_root."""
+
     async def _fallback(scope, receive, send):  # type: ignore[no-untyped-def]
         await send({"type": "http.response.start", "status": 404, "headers": []})
         await send({"type": "http.response.body", "body": b""})
@@ -44,7 +44,9 @@ async def test_thumbnail_served(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}")
+        resp = await client.get(
+            f"/thumbnails/{BACKEND_NAME}/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}"
+        )
     assert resp.status_code == 200
     assert resp.content == FAKE_AVIF
     assert resp.headers["content-type"] == "image/avif"
@@ -64,5 +66,7 @@ async def test_thumbnail_missing_file_returns_404(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/thumbnails/{BACKEND_NAME}/2024/2024-08/.ouestcharlie/{_AVIF_FILENAME}")
+        resp = await client.get(
+            f"/thumbnails/{BACKEND_NAME}/2024/2024-08/.ouestcharlie/{_AVIF_FILENAME}"
+        )
     assert resp.status_code == 404
