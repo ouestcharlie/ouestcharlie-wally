@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "wally"
+name = "ouestcharlie-wally"
 version = "0.1.0"
 description = "OuEstCharlie Wally — photo search/consumption agent"
 requires-python = ">=3.11"
