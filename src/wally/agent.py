@@ -27,9 +27,9 @@ class WallyAgent(AgentBase):
 
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
     launching). Exposes MCP tools:
-    - ``list_search_fields_tool``: returns all queryable fields with types and formats.
+    - ``list_search_fields``: returns all queryable fields with types and formats.
     - ``get_partition_summaries``: returns the root summary for the backend.
-    - ``search_photos_tool``: searches photos using a generic ``filters`` dict driven
+    - ``search_photos``: searches photos using a generic ``filters`` dict driven
       by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
 
     Wally is read-only — it never writes XMP sidecars or manifests.
@@ -44,12 +44,12 @@ class WallyAgent(AgentBase):
         mcp = self.mcp
 
         @mcp.tool()
-        async def list_search_fields_tool() -> dict:
+        async def list_search_fields() -> dict:
             """List all searchable photo fields with their types and filter formats.
 
             Returns a ``fields`` list of descriptors. Use the field names and formats
             described here when constructing the ``filters`` argument for
-            ``search_photos_tool``.
+            ``search_photos``.
 
             Returns:
                 ``fields`` — list of field descriptors, each with:
@@ -91,7 +91,7 @@ class WallyAgent(AgentBase):
 
         @mcp.tool()
         async def get_partition_summaries() -> dict:
-            """Return the root summary of this backend as a plain dict.
+            """Return the summary of all partitions of this backend as a plain dict.
 
             The summary contains a flat list of all indexed partitions with
             their statistics (photo count, date range, rating range, GPS bbox).
@@ -104,8 +104,8 @@ class WallyAgent(AgentBase):
                 return {"unindexed": True}
             return serialize_summary(summary)
 
-        @mcp.tool()
-        async def search_photos_tool(
+        @mcp.tool(name="search_photos")
+        async def _search_photos_tool(
             ctx: Context,
             filters: dict | None = None,
             root: str = "",
@@ -117,13 +117,13 @@ class WallyAgent(AgentBase):
             pruning), then scanning surviving leaf manifests entry by entry.
             Wally never reads XMP sidecars — all metadata is inline in manifests.
 
-            Use ``list_search_fields_tool`` to discover all available fields and
+            Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
 
             Args:
                 filters: Optional dict mapping field names to filter values.
                     The valid fields and their formats are returned by
-                    ``list_search_fields_tool``. Examples::
+                    ``list_search_fields``. Examples::
 
                         # Photos taken in 2024 rated 4 or 5 stars
                         {"date": {"min": "2024", "max": "2024"},
@@ -234,7 +234,7 @@ def _check_filters(filters: dict | None) -> None:
     if unknown:
         raise ValueError(
             f"Unknown filter field(s): {', '.join(unknown)}. "
-            "Call list_search_fields_tool to discover available fields."
+            "Call list_search_fields to discover available fields."
         )
 
 
