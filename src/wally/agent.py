@@ -117,11 +117,16 @@ class WallyAgent(AgentBase):
             pruning), then scanning surviving leaf manifests entry by entry.
             Wally never reads XMP sidecars — all metadata is inline in manifests.
 
+            At least one filter OR a non-empty ``root`` is required. An unscoped,
+            unfiltered search over the entire backend is refused — use
+            ``get_partition_summaries`` instead to browse the library overview.
+
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
 
             Args:
-                filters: Optional dict mapping field names to filter values.
+                filters: Dict mapping field names to filter values. At least one
+                    filter must be provided unless ``root`` is non-empty.
                     The valid fields and their formats are returned by
                     ``list_search_fields``. Examples::
 
@@ -135,9 +140,10 @@ class WallyAgent(AgentBase):
                         # 4K landscape photos (width ≥ 3840)
                         {"width": {"min": 3840}}
 
-                    Omitting a field (or passing None) is a wildcard — matches all.
+                    Omitting a field within a non-empty filters dict is a wildcard
+                    — matches all values for that field.
                 root: Subtree to search, relative to the backend root.
-                    Defaults to ``""`` (entire library).
+                    When non-empty, an unfiltered scan of that subtree is allowed.
 
             Returns:
                 ``matches`` — list of matching photo records, each containing
@@ -149,6 +155,14 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
+            if not root and not filters:
+                raise ValueError(
+                    "Refusing unfiltered search over the entire backend. "
+                    "Use get_partition_summaries to browse the library overview, "
+                    "or provide at least one filter (e.g. dateTaken, tags, rating) "
+                    "or a non-empty root to scope the search."
+                )
+
             _check_filters(filters)
 
             predicate_filters: dict = {}
