@@ -476,7 +476,7 @@ async def test_tile_index_none_when_no_thumbnail_chunks(
 @pytest.mark.asyncio
 async def test_avif_path_propagated_to_match(store: ManifestStore, backend: LocalBackend) -> None:
     """avif_path on PhotoMatch points to the specific chunk AVIF file."""
-    avif_path = f"2024/07/{METADATA_DIR}/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+    avif_path = f"{METADATA_DIR}/2024/07/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
     chunk = ThumbnailChunk(
         avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
         grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:aa"]),

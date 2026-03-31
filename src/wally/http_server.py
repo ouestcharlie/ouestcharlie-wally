@@ -19,6 +19,8 @@ import logging
 from typing import Any
 from urllib.parse import unquote
 
+from ouestcharlie_toolkit.schema import preview_jpeg_path
+
 _log = logging.getLogger(__name__)
 
 
@@ -74,7 +76,7 @@ class MediaMiddleware:
         partition, hash_file = rest_parts
         content_hash = hash_file[:-4]  # strip ".jpg"
 
-        backend_path = f"{partition}/.ouestcharlie/previews/{hash_file}"
+        backend_path = preview_jpeg_path(partition, content_hash)
 
         if not await self._backend.exists(backend_path):
             await self._ensure_preview(partition, content_hash)
