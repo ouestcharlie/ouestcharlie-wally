@@ -330,10 +330,12 @@ def _can_prune(
             field_stat = getattr(summary, fdef.name, None)
             if field_stat is None:
                 continue  # no bbox in summary — conservative, don't prune
-            p_min_lat = field_stat.get("minLat")
-            p_max_lat = field_stat.get("maxLat")
-            p_min_lon = field_stat.get("minLon")
-            p_max_lon = field_stat.get("maxLon")
+            lat_stat = field_stat.get("lat", {})
+            lon_stat = field_stat.get("lon", {})
+            p_min_lat = lat_stat.get("min")
+            p_max_lat = lat_stat.get("max")
+            p_min_lon = lon_stat.get("min")
+            p_max_lon = lon_stat.get("max")
             if None in (p_min_lat, p_max_lat, p_min_lon, p_max_lon):
                 continue  # incomplete summary — conservative, don't prune
             if fv.min_lat is not None and p_max_lat < fv.min_lat:

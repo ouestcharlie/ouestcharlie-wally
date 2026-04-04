@@ -44,10 +44,8 @@ def _gps_summary(
     stats: dict = {
         "gps": {
             "type": "gps_bbox",
-            "minLat": min_lat,
-            "maxLat": max_lat,
-            "minLon": min_lon,
-            "maxLon": max_lon,
+            "lat": {"min": min_lat, "max": max_lat},
+            "lon": {"min": min_lon, "max": max_lon},
         }
     }
     return ManifestSummary(path=path, _stats=stats)
