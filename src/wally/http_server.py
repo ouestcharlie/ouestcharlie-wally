@@ -134,7 +134,7 @@ class MediaMiddleware:
     async def _handle_thumbnail(self, path: str, send: Any) -> None:
         # path = "/thumbnails/{backend_name}/{avif_path}"
         # where avif_path is the backend-relative path, e.g.:
-        #   "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+        #   ".ouestcharlie/2024/Jul/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
         parts = path.lstrip("/").split("/", 2)
         if len(parts) < 3:
             await _send_error(send, 404)
