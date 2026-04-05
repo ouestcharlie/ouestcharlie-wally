@@ -23,7 +23,7 @@ from wally.searcher import GpsBoxFilter, SearchPredicate, search_photos
 
 @pytest.fixture()
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(root=str(tmp_path))
+    return LocalBackend(root=tmp_path)
 
 
 @pytest.fixture()
