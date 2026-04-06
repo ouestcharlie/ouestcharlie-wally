@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouestcharlie-wally"
-version = "0.1.0"
+version = "0.2.0"
 description = "OuEstCharlie Wally — photo search/consumption agent"
 requires-python = ">=3.12"
 readme = "README.md"
@@ -18,7 +18,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "ouestcharlie-py-toolkit>=0.1.0",
+    "mcp>=1.27",
+    "starlette>=0.40",
+    "uvicorn>=0.30",
+    "ouestcharlie-py-toolkit>=0.2.0",
 ]
 
 [project.urls]
@@ -55,9 +58,8 @@ strict = true
 
 [dependency-groups]
 dev = [
-    "mcp[cli]>=1.26.0",
+    "mcp[cli]>=1.27",
     "pre-commit>=4.5.1",
-    "uvicorn>=0.30",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
 ]
