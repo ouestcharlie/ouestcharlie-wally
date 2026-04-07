@@ -1,4 +1,4 @@
-"""Tests for the get_root_manifest_tool logic.
+"""Tests for the get_partition_summaries logic.
 
 The tool calls manifest_store.read_summary() then serializes the result.
 Tests exercise that pipeline directly without going through the MCP layer.
@@ -10,7 +10,6 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
@@ -20,7 +19,6 @@ from ouestcharlie_toolkit.schema import (
     serialize_summary,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -28,7 +26,7 @@ from ouestcharlie_toolkit.schema import (
 
 @pytest.fixture()
 def backend(tmp_path: Path) -> LocalBackend:
-    return LocalBackend(root=str(tmp_path))
+    return LocalBackend(root=tmp_path)
 
 
 @pytest.fixture()
@@ -41,7 +39,7 @@ def _summary(path: str, photo_count: int = 1) -> ManifestSummary:
 
 
 # ---------------------------------------------------------------------------
-# get_root_manifest_tool — unindexed backend
+# get_partition_summaries — unindexed backend
 # ---------------------------------------------------------------------------
 
 
@@ -59,7 +57,7 @@ async def test_unindexed_backend_returns_unindexed_flag(store: ManifestStore) ->
 
 
 # ---------------------------------------------------------------------------
-# get_root_manifest_tool — indexed backend
+# get_partition_summaries — indexed backend
 # ---------------------------------------------------------------------------
 
 

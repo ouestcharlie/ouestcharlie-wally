@@ -4,7 +4,7 @@
 
 Wally is the consumption agent for OuEstCharlie. It is **read-only**: it never reads XMP sidecars or writes manifests. Wally runs in two modes simultaneously:
 
-1. **MCP search server** — Woof keeps Wally running as a persistent sidecar (stdio MCP server) for the duration of the Woof session. Woof calls `search_photos_tool` in response to Claude tool calls and forwards results to the gallery UI.
+1. **MCP search server** — Woof keeps Wally running as a persistent sidecar (stdio MCP server) for the duration of the Woof session. Woof calls `search_photos` in response to Claude tool calls and forwards results to the gallery UI.
 2. **HTTP server** — Wally exposes a local HTTP server that serves thumbnail AVIF strips and on-demand JPEG previews. Both are read via the backend abstraction. On preview cache miss, it generates the JPEG by calling `image-proc` (Rust CLI) and caches the result at `{partition}/.ouestcharlie/previews/{content_hash}.jpg`. Subsequent requests are served from the backend cache.
 
 Wally is kept alive (not spawned per call) so its HTTP server remains available between MCP tool calls to serve preview requests from the gallery.
@@ -27,7 +27,7 @@ tests/
 
 ## MCP Tool Interface
 
-### `search_photos_tool`
+### `search_photos`
 
 **Input** (all fields optional):
 
@@ -225,9 +225,9 @@ V1: results are returned in manifest traversal order — alphabetical by partiti
 
 | Tool | Description |
 |---|---|
-| `search_photos_tool` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
-| `list_search_fields_tool` | Return all queryable fields with types and filter formats |
-| `get_root_manifest_tool` | Return the root summary (all indexed partitions with statistics) |
+| `search_photos` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
+| `list_search_fields` | Return all queryable fields with types and filter formats |
+| `get_partition_summaries` | Return the root summary (all indexed partitions with statistics) |
 | `get_http_port_tool` | Return the port Wally's HTTP preview server is listening on (diagnostic) |
 
 ## Scope and Deferred Items

@@ -34,5 +34,5 @@ def test_multiple_unknown_fields_listed_in_error() -> None:
 
 
 def test_error_message_mentions_list_tool() -> None:
-    with pytest.raises(ValueError, match="list_search_fields_tool"):
+    with pytest.raises(ValueError, match="list_search_fields"):
         _check_filters({"nonexistent": "value"})

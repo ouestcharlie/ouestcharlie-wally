@@ -14,9 +14,12 @@ generation runs exactly once per cache miss.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from urllib.parse import unquote
 from typing import Any
+from urllib.parse import unquote
+
+from ouestcharlie_toolkit.schema import preview_jpeg_path
 
 _log = logging.getLogger(__name__)
 
@@ -37,6 +40,7 @@ class MediaMiddleware:
         backend_name: str,
     ) -> None:
         from ouestcharlie_toolkit.backend import backend_from_config
+
         self._app = app
         self._backend = backend_from_config(backend_config)
         self._backend_name = backend_name
@@ -72,7 +76,7 @@ class MediaMiddleware:
         partition, hash_file = rest_parts
         content_hash = hash_file[:-4]  # strip ".jpg"
 
-        backend_path = f"{partition}/.ouestcharlie/previews/{hash_file}"
+        backend_path = preview_jpeg_path(partition, content_hash)
 
         if not await self._backend.exists(backend_path):
             await self._ensure_preview(partition, content_hash)
@@ -84,15 +88,17 @@ class MediaMiddleware:
             await _send_error(send, 503)
             return
 
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [
-                (b"content-type", b"image/jpeg"),
-                (b"content-length", str(len(data)).encode()),
-                (b"access-control-allow-origin", b"*"),
-            ],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"image/jpeg"),
+                    (b"content-length", str(len(data)).encode()),
+                    (b"access-control-allow-origin", b"*"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": data})
 
     async def _ensure_preview(self, partition: str, content_hash: str) -> None:
@@ -107,17 +113,18 @@ class MediaMiddleware:
                 self._in_progress[key] = event
                 wait = False
         if wait:
-            try:
+            with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(event.wait(), timeout=120.0)
-            except asyncio.TimeoutError:
-                pass
             return
         try:
             await _generate_preview(self._backend, partition, content_hash)
         except Exception as exc:
             _log.error(
                 "Preview generation failed — partition=%r hash=%r: %s",
-                partition, content_hash, exc, exc_info=True,
+                partition,
+                content_hash,
+                exc,
+                exc_info=True,
             )
         finally:
             async with self._lock:
@@ -127,7 +134,7 @@ class MediaMiddleware:
     async def _handle_thumbnail(self, path: str, send: Any) -> None:
         # path = "/thumbnails/{backend_name}/{avif_path}"
         # where avif_path is the backend-relative path, e.g.:
-        #   "2024/Jul/.ouestcharlie/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+        #   ".ouestcharlie/2024/Jul/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
         parts = path.lstrip("/").split("/", 2)
         if len(parts) < 3:
             await _send_error(send, 404)
@@ -137,8 +144,9 @@ class MediaMiddleware:
             await _send_error(send, 404)
             return
         filename = backend_path.rsplit("/", 1)[-1]
-        if not (filename.startswith("thumbnails-") or filename.startswith("previews-")) \
-                or not filename.endswith(".avif"):
+        if not (
+            filename.startswith("thumbnails-") or filename.startswith("previews-")
+        ) or not filename.endswith(".avif"):
             await _send_error(send, 404)
             return
         try:
@@ -146,15 +154,17 @@ class MediaMiddleware:
         except FileNotFoundError:
             await _send_error(send, 404)
             return
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [
-                (b"content-type", b"image/avif"),
-                (b"content-length", str(len(data)).encode()),
-                (b"access-control-allow-origin", b"*"),
-            ],
-        })
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"content-type", b"image/avif"),
+                    (b"content-length", str(len(data)).encode()),
+                    (b"access-control-allow-origin", b"*"),
+                ],
+            }
+        )
         await send({"type": "http.response.body", "body": data})
 
 
@@ -175,9 +185,7 @@ async def _generate_preview(
     manifest_store = ManifestStore(backend)
 
     leaf, _ = await manifest_store.read_leaf(partition)
-    entry = next(
-        (e for e in leaf.photos if e.content_hash == content_hash), None
-    )
+    entry = next((e for e in leaf.photos if e.content_hash == content_hash), None)
     if entry is None:
         raise FileNotFoundError(
             f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"

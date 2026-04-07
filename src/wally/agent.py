@@ -6,7 +6,7 @@ import calendar
 from datetime import datetime
 
 from mcp.server.fastmcp import Context
-
+from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.schema import serialize_summary
 from ouestcharlie_toolkit.server import AgentBase
@@ -27,9 +27,9 @@ class WallyAgent(AgentBase):
 
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
     launching). Exposes MCP tools:
-    - ``list_search_fields_tool``: returns all queryable fields with types and formats.
-    - ``get_root_manifest_tool``: returns the root summary for the backend.
-    - ``search_photos_tool``: searches photos using a generic ``filters`` dict driven
+    - ``list_search_fields``: returns all queryable fields with types and formats.
+    - ``get_partition_summaries``: returns the root summary for the backend.
+    - ``search_photos``: searches photos using a generic ``filters`` dict driven
       by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
 
     Wally is read-only — it never writes XMP sidecars or manifests.
@@ -44,12 +44,12 @@ class WallyAgent(AgentBase):
         mcp = self.mcp
 
         @mcp.tool()
-        async def list_search_fields_tool() -> dict:
+        async def list_search_fields() -> dict:
             """List all searchable photo fields with their types and filter formats.
 
             Returns a ``fields`` list of descriptors. Use the field names and formats
             described here when constructing the ``filters`` argument for
-            ``search_photos_tool``.
+            ``search_photos``.
 
             Returns:
                 ``fields`` — list of field descriptors, each with:
@@ -66,7 +66,9 @@ class WallyAgent(AgentBase):
                     'partial dates supported: "2024", "2024-07", "2024-07-14")'
                 ),
                 FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
-                FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
+                FieldType.STRING_COLLECTION: (
+                    "list of strings (AND semantics — all must be present)"
+                ),
                 FieldType.STRING_MATCH: "string (case-insensitive substring match)",
                 FieldType.GPS_BOX: (
                     '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
@@ -88,8 +90,8 @@ class WallyAgent(AgentBase):
             }
 
         @mcp.tool()
-        async def get_root_manifest_tool() -> dict:
-            """Return the root summary of this backend as a plain dict.
+        async def get_partition_summaries() -> dict:
+            """Return the summary of all partitions of this backend as a plain dict.
 
             The summary contains a flat list of all indexed partitions with
             their statistics (photo count, date range, rating range, GPS bbox).
@@ -102,8 +104,8 @@ class WallyAgent(AgentBase):
                 return {"unindexed": True}
             return serialize_summary(summary)
 
-        @mcp.tool()
-        async def search_photos_tool(
+        @mcp.tool(name="search_photos")
+        async def _search_photos_tool(
             ctx: Context,
             filters: dict | None = None,
             root: str = "",
@@ -115,13 +117,18 @@ class WallyAgent(AgentBase):
             pruning), then scanning surviving leaf manifests entry by entry.
             Wally never reads XMP sidecars — all metadata is inline in manifests.
 
-            Use ``list_search_fields_tool`` to discover all available fields and
+            At least one filter OR a non-empty ``root`` is required. An unscoped,
+            unfiltered search over the entire backend is refused — use
+            ``get_partition_summaries`` instead to browse the library overview.
+
+            Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
 
             Args:
-                filters: Optional dict mapping field names to filter values.
+                filters: Dict mapping field names to filter values. At least one
+                    filter must be provided unless ``root`` is non-empty.
                     The valid fields and their formats are returned by
-                    ``list_search_fields_tool``. Examples::
+                    ``list_search_fields``. Examples::
 
                         # Photos taken in 2024 rated 4 or 5 stars
                         {"date": {"min": "2024", "max": "2024"},
@@ -133,9 +140,10 @@ class WallyAgent(AgentBase):
                         # 4K landscape photos (width ≥ 3840)
                         {"width": {"min": 3840}}
 
-                    Omitting a field (or passing None) is a wildcard — matches all.
+                    Omitting a field within a non-empty filters dict is a wildcard
+                    — matches all values for that field.
                 root: Subtree to search, relative to the backend root.
-                    Defaults to ``""`` (entire library).
+                    When non-empty, an unfiltered scan of that subtree is allowed.
 
             Returns:
                 ``matches`` — list of matching photo records, each containing
@@ -147,6 +155,14 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
+            if not root and not filters:
+                raise ValueError(
+                    "Refusing unfiltered search over the entire backend. "
+                    "Use get_partition_summaries to browse the library overview, "
+                    "or provide at least one filter (e.g. dateTaken, tags, rating) "
+                    "or a non-empty root to scope the search."
+                )
+
             _check_filters(filters)
 
             predicate_filters: dict = {}
@@ -196,14 +212,7 @@ class WallyAgent(AgentBase):
             async def _on_progress(count: int, partition: str) -> None:
                 nonlocal partitions_done
                 partitions_done = count
-                try:
-                    await ctx.report_progress(
-                        progress=count,
-                        total=count + 1,  # total unknown; +1 keeps progress < 1.0
-                        message=f"scanned {partition}",
-                    )
-                except Exception:
-                    pass  # client may have disconnected; continue searching
+                await report_progress(ctx, count, count + 1, f"scanned {partition}")
 
             result = await search_photos(
                 self.backend,
@@ -239,7 +248,7 @@ def _check_filters(filters: dict | None) -> None:
     if unknown:
         raise ValueError(
             f"Unknown filter field(s): {', '.join(unknown)}. "
-            "Call list_search_fields_tool to discover available fields."
+            "Call list_search_fields to discover available fields."
         )
 
 

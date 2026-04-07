@@ -44,6 +44,7 @@ class _BearerGuard(BaseHTTPMiddleware):
     async def dispatch(self, request: object, call_next: object) -> object:  # type: ignore[override]
         from starlette.requests import Request
         from starlette.types import ASGIApp
+
         req: Request = request  # type: ignore[assignment]
         nxt: ASGIApp = call_next  # type: ignore[assignment]
         if req.headers.get("authorization") != self._expected:
@@ -64,8 +65,8 @@ async def _serve(app: object, sock: socket.socket, port: int) -> None:
 
     config = uvicorn.Config(
         app,  # type: ignore[arg-type]
-        log_level="warning",
-        access_log=False,
+        log_level="info",
+        access_log=True,
     )
     server = uvicorn.Server(config)
 
