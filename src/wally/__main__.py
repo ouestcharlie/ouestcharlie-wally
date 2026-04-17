@@ -86,9 +86,9 @@ async def _serve(app: object, sock: socket.socket, port: int) -> None:
 
 def main() -> None:
     agent_token = os.environ.get("WOOF_AGENT_TOKEN", "")
-    backend_name = os.environ.get("WALLY_BACKEND_NAME", "")
 
     agent = WallyAgent()
+    backend_name = agent.backend_config.get("name", "")
 
     # Layer the ASGI stack (innermost first):
     #   MCP app (Starlette, handles /mcp)

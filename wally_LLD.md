@@ -126,8 +126,7 @@ An `asyncio.Lock` guards a `dict[str, asyncio.Event]` keyed by `"{partition}:{co
 
 | Env var | Source | Purpose |
 |---|---|---|
-| `WALLY_HTTP_PORT` | Injected by Woof | Port to bind; falls back to OS-assigned if absent |
-| `WALLY_BACKEND_NAME` | Injected by Woof | Validated against the `{backend_name}` URL segment |
+| `WOOF_AGENT_TOKEN` | Injected by Woof | Security token for the HTTP server |
 | `WOOF_BACKEND_CONFIG` | Injected by Woof | JSON backend config (`{"type": "filesystem", "root": "..."}`) passed to `backend_from_config()` |
 
 ## Query Execution: Two-Level Pruning
