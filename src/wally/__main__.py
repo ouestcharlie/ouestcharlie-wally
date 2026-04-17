@@ -70,18 +70,25 @@ async def _serve(app: object, sock: socket.socket, port: int) -> None:
     )
     server = uvicorn.Server(config)
 
-    sys.stdout.write(f"WALLY_READY port={port}\n")
-    sys.stdout.flush()
-    _log.info("Wally ready — port %d", port)
+    async def _signal_ready() -> None:
+        # Wait until uvicorn has finished binding and is accepting connections
+        # before signalling Woof.  Emitting WALLY_READY too early (before
+        # server.serve() runs startup) causes connection failures on Windows
+        # where import/startup overhead is larger than on macOS/Linux.
+        while not server.started:
+            await asyncio.sleep(0.05)
+        sys.stdout.write(f"WALLY_READY port={port}\n")
+        sys.stdout.flush()
+        _log.info("Wally ready — port %d", port)
 
-    await server.serve(sockets=[sock])
+    await asyncio.gather(server.serve(sockets=[sock]), _signal_ready())
 
 
 def main() -> None:
     agent_token = os.environ.get("WOOF_AGENT_TOKEN", "")
-    backend_name = os.environ.get("WALLY_BACKEND_NAME", "")
 
     agent = WallyAgent()
+    backend_name = agent.backend_config.get("name", "")
 
     # Layer the ASGI stack (innermost first):
     #   MCP app (Starlette, handles /mcp)
