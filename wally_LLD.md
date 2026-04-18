@@ -74,6 +74,8 @@ _BearerGuard        — enforces Bearer token auth on all routes
 
 `MediaMiddleware` runs entirely in the asyncio event loop that drives the Starlette/MCP app — no daemon threads or secondary event loops. All file access goes through the backend abstraction (`ouestcharlie_toolkit.backend.Backend`), so the storage layer can be swapped without touching this class.
 
+`MediaMiddleware` owns a single `PersistentImageProc` instance for the lifetime of the server. All preview generation requests share this process, eliminating per-request subprocess startup cost (significant on Windows). `close()` shuts the process down gracefully; it is called from `__main__.py` in a `finally` block when the server exits.
+
 ### URL scheme
 
 ```
@@ -107,18 +109,21 @@ request arrives
   │                 │
   │                 ├─ already in-flight? → wait on asyncio.Event (dedup)
   │                 │
-  │                 └─ new → _generate_preview(backend, partition, content_hash)
+  │                 └─ new → _generate_preview(backend, partition, content_hash, image_proc)
   │                               │
   │                               1. ManifestStore.read_leaf(partition)
   │                               2. find PhotoEntry by content_hash
-  │                               3. generate_preview_jpeg(backend, partition, entry)
-  │                                  (stages photo → image-proc jpeg_preview → backend write)
+  │                               3. generate_preview_jpeg(backend, partition, entry,
+  │                                    image_proc=self._image_proc)
+  │                                  (stages photo → PersistentImageProc.request → backend write)
   │                               4. signal asyncio.Event
   │
   ├─ backend.read("{partition}/.ouestcharlie/previews/{hash}.jpg")
   │     ├─ FileNotFoundError → 503 (generation failed)
   │     └─ success → 200 image/jpeg
 ```
+
+`_generate_preview` receives the `PersistentImageProc` instance from `MediaMiddleware` and passes it to `generate_preview_jpeg`. The persistent process is serialised internally by an `asyncio.Lock` inside `PersistentImageProc`, so concurrent preview requests proceed safely.
 
 An `asyncio.Lock` guards a `dict[str, asyncio.Event]` keyed by `"{partition}:{content_hash}"`. If two requests arrive simultaneously for the same photo, only one triggers generation; the other awaits the event with a 120 s timeout.
 

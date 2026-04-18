@@ -19,6 +19,10 @@ import logging
 from typing import Any
 from urllib.parse import unquote
 
+from ouestcharlie_toolkit.backend import backend_from_config
+from ouestcharlie_toolkit.image_proc import PersistentImageProc
+from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
 from ouestcharlie_toolkit.schema import preview_jpeg_path
 
 _log = logging.getLogger(__name__)
@@ -42,9 +46,6 @@ class MediaMiddleware:
         backend_config: dict,
         backend_name: str,
     ) -> None:
-        from ouestcharlie_toolkit.backend import backend_from_config
-        from ouestcharlie_toolkit.thumbnail_builder import PersistentImageProc
-
         self._app = app
         self._backend = backend_from_config(backend_config)
         self._backend_name = backend_name
@@ -189,9 +190,6 @@ async def _generate_preview(
     image_proc: Any,
 ) -> None:
     """Find the photo entry in the leaf manifest and generate its JPEG preview."""
-    from ouestcharlie_toolkit.manifest import ManifestStore
-    from ouestcharlie_toolkit.thumbnail_builder import generate_preview_jpeg
-
     manifest_store = ManifestStore(backend)
 
     leaf, _ = await manifest_store.read_leaf(partition)
