@@ -89,7 +89,12 @@ class MediaMiddleware:
         backend_path = preview_jpeg_path(partition, content_hash)
 
         if not await self._backend.exists(backend_path):
+            _log.info(
+                "Preview cache miss — generating: partition=%r hash=%r", partition, content_hash
+            )
             await self._ensure_preview(partition, content_hash)
+        else:
+            _log.debug("Preview cache hit: partition=%r hash=%r", partition, content_hash)
 
         try:
             data, _ = await self._backend.read(backend_path)
@@ -98,6 +103,9 @@ class MediaMiddleware:
             await _send_error(send, 503)
             return
 
+        _log.info(
+            "Serving preview: hash=%r size=%d bytes path=%s", content_hash, len(data), backend_path
+        )
         await send(
             {
                 "type": "http.response.start",
@@ -123,8 +131,10 @@ class MediaMiddleware:
                 self._in_progress[key] = event
                 wait = False
         if wait:
+            _log.debug("Preview already in progress, waiting: hash=%r", content_hash)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(event.wait(), timeout=120.0)
+            _log.debug("Preview wait complete: hash=%r", content_hash)
             return
         try:
             await _generate_preview(self._backend, partition, content_hash, self._image_proc)
@@ -199,4 +209,10 @@ async def _generate_preview(
             f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"
         )
 
-    await generate_preview_jpeg(backend, partition, entry, image_proc=image_proc)
+    _log.debug(
+        "Generating preview: hash=%r filename=%r partition=%r",
+        content_hash,
+        entry.filename,
+        partition,
+    )
+    await generate_preview_jpeg(image_proc, backend, partition, entry)
