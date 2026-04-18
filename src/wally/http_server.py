@@ -27,9 +27,12 @@ _log = logging.getLogger(__name__)
 class MediaMiddleware:
     """ASGI middleware: handles /thumbnails/… and /previews/… in-process.
 
-
     All file access goes through the backend abstraction so the storage
     layer can be swapped (local → remote) without touching this class.
+
+    A single :class:`PersistentImageProc` instance is kept alive for the
+    lifetime of this middleware and reused across all preview requests,
+    eliminating per-request subprocess startup overhead.
     """
 
     def __init__(
@@ -40,13 +43,19 @@ class MediaMiddleware:
         backend_name: str,
     ) -> None:
         from ouestcharlie_toolkit.backend import backend_from_config
+        from ouestcharlie_toolkit.thumbnail_builder import PersistentImageProc
 
         self._app = app
         self._backend = backend_from_config(backend_config)
         self._backend_name = backend_name
+        self._image_proc = PersistentImageProc()
         # asyncio.Lock() is safe to construct without a running loop in Python ≥ 3.11.
         self._lock = asyncio.Lock()
         self._in_progress: dict[str, asyncio.Event] = {}
+
+    async def close(self) -> None:
+        """Shut down the persistent image-proc process."""
+        await self._image_proc.close()
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") == "http":
@@ -117,7 +126,7 @@ class MediaMiddleware:
                 await asyncio.wait_for(event.wait(), timeout=120.0)
             return
         try:
-            await _generate_preview(self._backend, partition, content_hash)
+            await _generate_preview(self._backend, partition, content_hash, self._image_proc)
         except Exception as exc:
             _log.error(
                 "Preview generation failed — partition=%r hash=%r: %s",
@@ -177,6 +186,7 @@ async def _generate_preview(
     backend: Any,
     partition: str,
     content_hash: str,
+    image_proc: Any,
 ) -> None:
     """Find the photo entry in the leaf manifest and generate its JPEG preview."""
     from ouestcharlie_toolkit.manifest import ManifestStore
@@ -191,4 +201,4 @@ async def _generate_preview(
             f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"
         )
 
-    await generate_preview_jpeg(backend, partition, entry)
+    await generate_preview_jpeg(backend, partition, entry, image_proc=image_proc)
