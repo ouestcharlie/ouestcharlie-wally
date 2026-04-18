@@ -2,6 +2,8 @@
 
 Wally is the search/consumption agent for OuEstCharlie. It is **stateless and read-only**: Woof launches it as a child process (MCP server over stdio), passes a structured search predicate via `search_photos`, and Wally returns matching photo metadata by traversing the manifest tree. It never reads XMP sidecars or writes anything.
 
+> **More about OuEstCharlie on the [OuEstCharlie Blog](https://ouestcharlie.github.io/ouestcharlie/)**
+
 ## Design Documents
 
 | Document | Purpose |
@@ -46,6 +48,24 @@ uv sync
 ```bash
 .venv/bin/python -m pytest tests/ -v
 ```
+
+## MCP Inspector
+
+Wally runs as a standalone HTTP server (streamable HTTP transport), so it cannot use `mcp dev`. Start it manually and connect the Inspector to the printed port:
+
+```bash
+WOOF_BACKEND_CONFIG='{"type":"filesystem","root":"/path/to/photos","name":"my-backend"}' \
+    .venv/bin/python -m wally
+# stdout: WALLY_READY port=<port>
+```
+
+Then start the Inspector and connect to `http://127.0.0.1:<port>/mcp` (no auth token needed when `WOOF_AGENT_TOKEN` is unset):
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+> **Note:** The default MCP Inspector timeout is too low for large-library search queries. Increase it in the Inspector settings before calling `search_photos`.
 
 ## Context
 
