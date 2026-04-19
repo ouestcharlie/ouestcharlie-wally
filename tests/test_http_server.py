@@ -77,7 +77,7 @@ async def test_thumbnail_missing_file_returns_404(backend_root: Path) -> None:
 # Preview — PersistentImageProc integration
 # ---------------------------------------------------------------------------
 
-_CONTENT_HASH = "sha256:" + "ab" * 32
+_CONTENT_HASH = "KfAbc123A2nBcR8xYvLm1P"
 _PREVIEW_PATH = f".ouestcharlie/previews/{_CONTENT_HASH}.jpg"
 
 

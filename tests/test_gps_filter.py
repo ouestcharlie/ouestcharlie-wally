@@ -35,7 +35,9 @@ def _entry(filename: str, lat: float | None, lon: float | None) -> PhotoEntry:
     searchable: dict = {}
     if lat is not None and lon is not None:
         searchable["gps"] = [lat, lon]
-    return PhotoEntry(filename=filename, content_hash=f"sha256:{filename}", searchable=searchable)
+    return PhotoEntry(
+        filename=filename, content_hash="KfAbc123A2nBcR8xYvLm1P", searchable=searchable
+    )
 
 
 def _gps_summary(
