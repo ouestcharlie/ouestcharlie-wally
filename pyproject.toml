@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouestcharlie-wally"
-version = "0.5.2"
+version = "0.6.0"
 description = "OuEstCharlie Wally — photo search/consumption agent"
 requires-python = ">=3.12"
 readme = "README.md"
