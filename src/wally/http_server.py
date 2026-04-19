@@ -19,6 +19,10 @@ import logging
 from typing import Any
 from urllib.parse import unquote
 
+from ouestcharlie_toolkit.backend import backend_from_config
+from ouestcharlie_toolkit.image_proc import PersistentImageProc
+from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
 from ouestcharlie_toolkit.schema import preview_jpeg_path
 
 _log = logging.getLogger(__name__)
@@ -27,9 +31,12 @@ _log = logging.getLogger(__name__)
 class MediaMiddleware:
     """ASGI middleware: handles /thumbnails/… and /previews/… in-process.
 
-
     All file access goes through the backend abstraction so the storage
     layer can be swapped (local → remote) without touching this class.
+
+    A single :class:`PersistentImageProc` instance is kept alive for the
+    lifetime of this middleware and reused across all preview requests,
+    eliminating per-request subprocess startup overhead.
     """
 
     def __init__(
@@ -39,14 +46,17 @@ class MediaMiddleware:
         backend_config: dict,
         backend_name: str,
     ) -> None:
-        from ouestcharlie_toolkit.backend import backend_from_config
-
         self._app = app
         self._backend = backend_from_config(backend_config)
         self._backend_name = backend_name
+        self._image_proc = PersistentImageProc()
         # asyncio.Lock() is safe to construct without a running loop in Python ≥ 3.11.
         self._lock = asyncio.Lock()
         self._in_progress: dict[str, asyncio.Event] = {}
+
+    async def close(self) -> None:
+        """Shut down the persistent image-proc process."""
+        await self._image_proc.close()
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") == "http":
@@ -79,7 +89,12 @@ class MediaMiddleware:
         backend_path = preview_jpeg_path(partition, content_hash)
 
         if not await self._backend.exists(backend_path):
+            _log.info(
+                "Preview cache miss — generating: partition=%r hash=%r", partition, content_hash
+            )
             await self._ensure_preview(partition, content_hash)
+        else:
+            _log.debug("Preview cache hit: partition=%r hash=%r", partition, content_hash)
 
         try:
             data, _ = await self._backend.read(backend_path)
@@ -88,6 +103,9 @@ class MediaMiddleware:
             await _send_error(send, 503)
             return
 
+        _log.info(
+            "Serving preview: hash=%r size=%d bytes path=%s", content_hash, len(data), backend_path
+        )
         await send(
             {
                 "type": "http.response.start",
@@ -113,11 +131,13 @@ class MediaMiddleware:
                 self._in_progress[key] = event
                 wait = False
         if wait:
+            _log.debug("Preview already in progress, waiting: hash=%r", content_hash)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(event.wait(), timeout=120.0)
+            _log.debug("Preview wait complete: hash=%r", content_hash)
             return
         try:
-            await _generate_preview(self._backend, partition, content_hash)
+            await _generate_preview(self._backend, partition, content_hash, self._image_proc)
         except Exception as exc:
             _log.error(
                 "Preview generation failed — partition=%r hash=%r: %s",
@@ -177,11 +197,9 @@ async def _generate_preview(
     backend: Any,
     partition: str,
     content_hash: str,
+    image_proc: Any,
 ) -> None:
     """Find the photo entry in the leaf manifest and generate its JPEG preview."""
-    from ouestcharlie_toolkit.manifest import ManifestStore
-    from ouestcharlie_toolkit.thumbnail_builder import generate_preview_jpeg
-
     manifest_store = ManifestStore(backend)
 
     leaf, _ = await manifest_store.read_leaf(partition)
@@ -191,4 +209,10 @@ async def _generate_preview(
             f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"
         )
 
-    await generate_preview_jpeg(backend, partition, entry)
+    _log.debug(
+        "Generating preview: hash=%r filename=%r partition=%r",
+        content_hash,
+        entry.filename,
+        partition,
+    )
+    await generate_preview_jpeg(image_proc, backend, partition, entry)

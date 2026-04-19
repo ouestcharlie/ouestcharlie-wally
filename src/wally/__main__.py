@@ -60,7 +60,7 @@ def _bind_free_port() -> tuple[socket.socket, int]:
     return sock, sock.getsockname()[1]
 
 
-async def _serve(app: object, sock: socket.socket, port: int) -> None:
+async def _serve(app: object, sock: socket.socket, port: int, media: MediaMiddleware) -> None:
     import uvicorn
 
     config = uvicorn.Config(
@@ -81,7 +81,11 @@ async def _serve(app: object, sock: socket.socket, port: int) -> None:
         sys.stdout.flush()
         _log.info("Wally ready — port %d", port)
 
-    await asyncio.gather(server.serve(sockets=[sock]), _signal_ready())
+    try:
+        await asyncio.gather(server.serve(sockets=[sock]), _signal_ready())
+    finally:
+        await media.close()
+        _log.info("image-proc shut down")
 
 
 def main() -> None:
@@ -95,16 +99,17 @@ def main() -> None:
     #   → MediaMiddleware (intercepts /previews/… and /thumbnails/…)
     #   → _BearerGuard (enforces auth on all routes, including media)
     mcp_app = agent.mcp.streamable_http_app()
-    app: object = MediaMiddleware(
+    media: MediaMiddleware = MediaMiddleware(
         mcp_app,
         backend_config=agent.backend_config,
         backend_name=backend_name,
     )
+    app: object = media
     if agent_token:
         app = _BearerGuard(app, token=agent_token)
 
     sock, port = _bind_free_port()
-    asyncio.run(_serve(app, sock, port))
+    asyncio.run(_serve(app, sock, port, media))
 
 
 if __name__ == "__main__":

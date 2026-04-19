@@ -14,6 +14,10 @@ Never use `python`, `python3`, or `uv run pytest` — use the project's own `.ve
 - Wrap `ctx.report_progress()` calls in `try/except` and log failures at DEBUG level. The MCP client may disconnect or time out while the tool is still running; a failed progress notification must never abort the operation.
 - For long-running tools, the MCP Inspector timeout must be increased in its settings (default is too low for heavy queries).
 
+## Code Style
+
+- **All imports at the top of the file** — never use lazy imports inside functions or methods.
+
 ## Key Design Rules
 
 - `searcher.py` is **pure async logic** with no MCP dependency — easy to unit test independently.
