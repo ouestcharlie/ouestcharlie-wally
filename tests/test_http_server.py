@@ -78,7 +78,6 @@ async def test_thumbnail_missing_file_returns_404(backend_root: Path) -> None:
 # ---------------------------------------------------------------------------
 
 _CONTENT_HASH = "KfAbc123A2nBcR8xYvLm1P"
-_PREVIEW_PATH = f".ouestcharlie/previews/{_CONTENT_HASH}.jpg"
 
 
 @pytest.fixture()
