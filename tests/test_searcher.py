@@ -43,7 +43,7 @@ def store(backend: LocalBackend) -> ManifestStore:
 
 def _entry(
     filename: str = "photo.jpg",
-    content_hash: str = "sha256:aabbcc",
+    content_hash: str = "aabbcc",
     date_taken: datetime | None = datetime(2024, 7, 14, 10, 0, 0),
     tags: list[str] | None = None,
     rating: int | None = None,
@@ -152,9 +152,9 @@ async def test_date_range_excludes(store: ManifestStore, backend: LocalBackend) 
 async def test_empty_predicate_returns_all(store: ManifestStore, backend: LocalBackend) -> None:
     """Empty predicate matches all photos."""
     photos = [
-        _entry("a.jpg", "sha256:aa", datetime(2022, 1, 1)),
-        _entry("b.jpg", "sha256:bb", datetime(2023, 5, 15)),
-        _entry("c.jpg", "sha256:cc", None),
+        _entry("a.jpg", "aa", datetime(2022, 1, 1)),
+        _entry("b.jpg", "bb", datetime(2023, 5, 15)),
+        _entry("c.jpg", "cc", None),
     ]
     await _leaf(store, "", photos)
     result = await search_photos(backend, SearchPredicate())
@@ -207,8 +207,8 @@ async def test_tag_filter_and_semantics(store: ManifestStore, backend: LocalBack
         store,
         "",
         [
-            _entry("a.jpg", "sha256:aa", tags=["travel", "france"]),
-            _entry("b.jpg", "sha256:bb", tags=["travel"]),
+            _entry("a.jpg", "aa", tags=["travel", "france"]),
+            _entry("b.jpg", "bb", tags=["travel"]),
         ],
     )
     result = await search_photos(
@@ -242,8 +242,8 @@ async def test_rating_min_filter(store: ManifestStore, backend: LocalBackend) ->
         store,
         "",
         [
-            _entry("high.jpg", "sha256:hh", rating=4),
-            _entry("low.jpg", "sha256:ll", rating=3),
+            _entry("high.jpg", "hh", rating=4),
+            _entry("low.jpg", "ll", rating=3),
         ],
     )
     result = await search_photos(
@@ -261,8 +261,8 @@ async def test_rating_max_filter(store: ManifestStore, backend: LocalBackend) ->
         store,
         "",
         [
-            _entry("low.jpg", "sha256:ll", rating=2),
-            _entry("high.jpg", "sha256:hh", rating=3),
+            _entry("low.jpg", "ll", rating=2),
+            _entry("high.jpg", "hh", rating=3),
         ],
     )
     result = await search_photos(
@@ -298,8 +298,8 @@ async def test_make_substring_case_insensitive(store: ManifestStore, backend: Lo
         store,
         "",
         [
-            _entry("nikon.jpg", "sha256:nn", make="Nikon Corporation"),
-            _entry("canon.jpg", "sha256:cc", make="Canon"),
+            _entry("nikon.jpg", "nn", make="Nikon Corporation"),
+            _entry("canon.jpg", "cc", make="Canon"),
         ],
     )
     result = await search_photos(
@@ -319,8 +319,8 @@ async def test_model_substring_case_insensitive(
         store,
         "",
         [
-            _entry("d850.jpg", "sha256:aa", model="NIKON D850"),
-            _entry("other.jpg", "sha256:bb", model="Canon EOS R5"),
+            _entry("d850.jpg", "aa", model="NIKON D850"),
+            _entry("other.jpg", "bb", model="Canon EOS R5"),
         ],
     )
     result = await search_photos(
@@ -358,13 +358,13 @@ async def test_parent_prunes_by_date_summary(
     await _leaf(
         store,
         "old",
-        [_entry("old.jpg", "sha256:oo", datetime(2022, 6, 1))],
+        [_entry("old.jpg", "oo", datetime(2022, 6, 1))],
         summary=_summary("old", date_min=datetime(2022, 1, 1), date_max=datetime(2022, 12, 31)),
     )
     await _leaf(
         store,
         "new",
-        [_entry("new.jpg", "sha256:nn", datetime(2024, 6, 1))],
+        [_entry("new.jpg", "nn", datetime(2024, 6, 1))],
         summary=_summary("new", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)),
     )
 
@@ -384,13 +384,13 @@ async def test_parent_prunes_by_rating_summary(store: ManifestStore, backend: Lo
     await _leaf(
         store,
         "low",
-        [_entry("low.jpg", "sha256:ll", rating=2)],
+        [_entry("low.jpg", "ll", rating=2)],
         summary=_summary("low", rating_min=2, rating_max=2),
     )
     await _leaf(
         store,
         "high",
-        [_entry("high.jpg", "sha256:hh", rating=5)],
+        [_entry("high.jpg", "hh", rating=5)],
         summary=_summary("high", rating_min=5, rating_max=5),
     )
 
@@ -432,9 +432,9 @@ async def test_parent_conservative_with_none_summary_dates(
 async def test_tile_index_computed_correctly(store: ManifestStore, backend: LocalBackend) -> None:
     """tile_index reflects the photo's position in the chunk's grid.photo_order."""
     photos = [
-        _entry("a.jpg", "sha256:aaa", datetime(2024, 1, 1)),
-        _entry("b.jpg", "sha256:bbb", datetime(2024, 1, 2)),
-        _entry("c.jpg", "sha256:ccc", datetime(2024, 1, 3)),
+        _entry("a.jpg", "aaa", datetime(2024, 1, 1)),
+        _entry("b.jpg", "bbb", datetime(2024, 1, 2)),
+        _entry("c.jpg", "ccc", datetime(2024, 1, 3)),
     ]
     chunk = ThumbnailChunk(
         avif_hash="HASH22CHARSEXAMPLE" + "XXXX",
@@ -442,7 +442,7 @@ async def test_tile_index_computed_correctly(store: ManifestStore, backend: Loca
             cols=3,
             rows=1,
             tile_size=256,
-            photo_order=["sha256:aaa", "sha256:bbb", "sha256:ccc"],
+            photo_order=["aaa", "bbb", "ccc"],
         ),
     )
     await _leaf(store, "", photos, chunks=[chunk])
@@ -479,9 +479,9 @@ async def test_avif_path_propagated_to_match(store: ManifestStore, backend: Loca
     avif_path = f"{METADATA_DIR}/2024/07/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
     chunk = ThumbnailChunk(
         avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:aa"]),
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["aa"]),
     )
-    await _leaf(store, "2024/07", [_entry("photo.jpg", "sha256:aa")], chunks=[chunk])
+    await _leaf(store, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
     result = await search_photos(backend, SearchPredicate(), root="2024/07")
     assert len(result.matches) == 1
     assert result.matches[0].avif_path == avif_path
@@ -490,7 +490,7 @@ async def test_avif_path_propagated_to_match(store: ManifestStore, backend: Loca
 @pytest.mark.asyncio
 async def test_file_path_root_partition(store: ManifestStore, backend: LocalBackend) -> None:
     """file_path for the root partition is just the filename."""
-    await _leaf(store, "", [_entry("photo.jpg", "sha256:xx")])
+    await _leaf(store, "", [_entry("photo.jpg", "xx")])
     result = await search_photos(backend, SearchPredicate())
     assert result.matches[0].file_path == "photo.jpg"
 
@@ -498,7 +498,7 @@ async def test_file_path_root_partition(store: ManifestStore, backend: LocalBack
 @pytest.mark.asyncio
 async def test_file_path_nested_partition(store: ManifestStore, backend: LocalBackend) -> None:
     """file_path for a nested partition includes the partition prefix."""
-    await _leaf(store, "Vacations/Italy", [_entry("DSC_001.jpg", "sha256:xx")])
+    await _leaf(store, "Vacations/Italy", [_entry("DSC_001.jpg", "xx")])
     result = await search_photos(backend, SearchPredicate(), root="Vacations/Italy")
     assert result.matches[0].file_path == "Vacations/Italy/DSC_001.jpg"
 
@@ -543,22 +543,22 @@ async def test_multi_partition_search(store: ManifestStore, backend: LocalBacken
     await _leaf(
         store,
         "2024/01",
-        [_entry("jan.jpg", "sha256:j1", datetime(2024, 1, 15))],
+        [_entry("jan.jpg", "j1", datetime(2024, 1, 15))],
         summary=_summary("2024/01", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 1, 31)),
     )
     await _leaf(
         store,
         "2024/07",
         [
-            _entry("jul1.jpg", "sha256:j2", datetime(2024, 7, 4)),
-            _entry("jul2.jpg", "sha256:j3", datetime(2024, 7, 20)),
+            _entry("jul1.jpg", "j2", datetime(2024, 7, 4)),
+            _entry("jul2.jpg", "j3", datetime(2024, 7, 20)),
         ],
         summary=_summary("2024/07", date_min=datetime(2024, 7, 1), date_max=datetime(2024, 7, 31)),
     )
     await _leaf(
         store,
         "2023/12",
-        [_entry("dec.jpg", "sha256:d1", datetime(2023, 12, 25))],
+        [_entry("dec.jpg", "d1", datetime(2023, 12, 25))],
         summary=_summary(
             "2023/12", date_min=datetime(2023, 12, 1), date_max=datetime(2023, 12, 31)
         ),
@@ -577,8 +577,8 @@ async def test_multi_partition_search(store: ManifestStore, backend: LocalBacken
 @pytest.mark.asyncio
 async def test_partitions_scanned_counter(store: ManifestStore, backend: LocalBackend) -> None:
     """partitions_scanned increments once per leaf manifest read."""
-    await _leaf(store, "p1", [_entry("a.jpg", "sha256:aa")])
-    await _leaf(store, "p2", [_entry("b.jpg", "sha256:bb")])
+    await _leaf(store, "p1", [_entry("a.jpg", "aa")])
+    await _leaf(store, "p2", [_entry("b.jpg", "bb")])
     result = await search_photos(backend, SearchPredicate())
     assert result.partitions_scanned == 2
 
@@ -595,9 +595,9 @@ async def test_combined_date_and_rating_filter(store: ManifestStore, backend: Lo
         store,
         "",
         [
-            _entry("match.jpg", "sha256:m1", date_taken=datetime(2024, 6, 1), rating=5),
-            _entry("wrong_date.jpg", "sha256:m2", date_taken=datetime(2023, 1, 1), rating=5),
-            _entry("wrong_rating.jpg", "sha256:m3", date_taken=datetime(2024, 6, 1), rating=2),
+            _entry("match.jpg", "m1", date_taken=datetime(2024, 6, 1), rating=5),
+            _entry("wrong_date.jpg", "m2", date_taken=datetime(2023, 1, 1), rating=5),
+            _entry("wrong_rating.jpg", "m3", date_taken=datetime(2024, 6, 1), rating=2),
         ],
     )
     result = await search_photos(
@@ -620,9 +620,9 @@ async def test_combined_tag_and_make_filter(store: ManifestStore, backend: Local
         store,
         "",
         [
-            _entry("both.jpg", "sha256:b", tags=["travel"], make="Nikon"),
-            _entry("tag_only.jpg", "sha256:t", tags=["travel"], make="Canon"),
-            _entry("make_only.jpg", "sha256:k", tags=["portrait"], make="Nikon"),
+            _entry("both.jpg", "b", tags=["travel"], make="Nikon"),
+            _entry("tag_only.jpg", "t", tags=["travel"], make="Canon"),
+            _entry("make_only.jpg", "k", tags=["portrait"], make="Nikon"),
         ],
     )
     result = await search_photos(
@@ -650,8 +650,8 @@ async def test_width_min_filter(store: ManifestStore, backend: LocalBackend) -> 
         store,
         "",
         [
-            _entry("wide.jpg", "sha256:w", width=3840),
-            _entry("narrow.jpg", "sha256:n", width=1920),
+            _entry("wide.jpg", "w", width=3840),
+            _entry("narrow.jpg", "n", width=1920),
         ],
     )
     result = await search_photos(
@@ -669,8 +669,8 @@ async def test_height_max_filter(store: ManifestStore, backend: LocalBackend) ->
         store,
         "",
         [
-            _entry("short.jpg", "sha256:s", height=1080),
-            _entry("tall.jpg", "sha256:t", height=2160),
+            _entry("short.jpg", "s", height=1080),
+            _entry("tall.jpg", "t", height=2160),
         ],
     )
     result = await search_photos(
@@ -704,7 +704,7 @@ async def test_date_filter_strips_timezone(store: ManifestStore, backend: LocalB
     """Timezone-aware dates in entries are compared naively (strip tzinfo)."""
     tz_entry = PhotoEntry(
         filename="tz.jpg",
-        content_hash="sha256:tz",
+        content_hash="tz",
         searchable={"date_taken": datetime(2024, 7, 14, 10, 0, 0, tzinfo=UTC)},
     )
     await _leaf(store, "", [tz_entry])
@@ -732,16 +732,16 @@ async def test_multi_chunk_tile_lookup(store: ManifestStore, backend: LocalBacke
     """Photos in different chunks get the correct avif_path and tile_index."""
     chunk_a = ThumbnailChunk(
         avif_hash="AAAA",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:a"]),
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["a"]),
     )
     chunk_b = ThumbnailChunk(
         avif_hash="BBBB",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["sha256:b"]),
+        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["b"]),
     )
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
         partition="",
-        photos=[_entry("a.jpg", "sha256:a"), _entry("b.jpg", "sha256:b")],
+        photos=[_entry("a.jpg", "a"), _entry("b.jpg", "b")],
         thumbnail_chunks=[chunk_a, chunk_b],
     )
     await store.create_leaf(manifest)
@@ -766,8 +766,8 @@ async def test_root_parameter_limits_search_to_subtree(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
     """root= restricts search to the specified subtree, ignoring sibling partitions."""
-    await _leaf(store, "2024/07", [_entry("july.jpg", "sha256:j1")])
-    await _leaf(store, "2023/12", [_entry("dec.jpg", "sha256:d1")])
+    await _leaf(store, "2024/07", [_entry("july.jpg", "j1")])
+    await _leaf(store, "2023/12", [_entry("dec.jpg", "d1")])
 
     result = await search_photos(backend, SearchPredicate(), root="2024/07")
     assert len(result.matches) == 1
@@ -782,7 +782,7 @@ async def test_root_parameter_limits_search_to_subtree(
 @pytest.mark.asyncio
 async def test_deep_nesting_traversal(store: ManifestStore, backend: LocalBackend) -> None:
     """A deeply nested partition is found via summary.json."""
-    await _leaf(store, "A/B/C", [_entry("deep.jpg", "sha256:d1", date_taken=datetime(2024, 3, 1))])
+    await _leaf(store, "A/B/C", [_entry("deep.jpg", "d1", date_taken=datetime(2024, 3, 1))])
 
     result = await search_photos(
         backend,
@@ -802,7 +802,7 @@ async def test_deep_nesting_prunes_intermediate_parent(
     await _leaf(
         store,
         "recent/sub",
-        [_entry("new.jpg", "sha256:n", date_taken=datetime(2024, 6, 1))],
+        [_entry("new.jpg", "n", date_taken=datetime(2024, 6, 1))],
         summary=_summary(
             "recent/sub", date_min=datetime(2024, 1, 1), date_max=datetime(2024, 12, 31)
         ),
@@ -810,7 +810,7 @@ async def test_deep_nesting_prunes_intermediate_parent(
     await _leaf(
         store,
         "old/sub",
-        [_entry("old.jpg", "sha256:o", date_taken=datetime(2020, 6, 1))],
+        [_entry("old.jpg", "o", date_taken=datetime(2020, 6, 1))],
         summary=_summary("old/sub", date_min=datetime(2020, 1, 1), date_max=datetime(2020, 12, 31)),
     )
 
@@ -834,8 +834,8 @@ async def test_on_progress_called_for_each_leaf(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
     """on_progress is called once per leaf manifest scanned."""
-    await _leaf(store, "p1", [_entry("a.jpg", "sha256:a1")])
-    await _leaf(store, "p2", [_entry("b.jpg", "sha256:b1")])
+    await _leaf(store, "p1", [_entry("a.jpg", "a1")])
+    await _leaf(store, "p2", [_entry("b.jpg", "b1")])
 
     calls: list[tuple[int, str]] = []
 
@@ -863,9 +863,9 @@ async def test_rating_exact_match(store: ManifestStore, backend: LocalBackend) -
         store,
         "",
         [
-            _entry("three.jpg", "sha256:3", rating=3),
-            _entry("four.jpg", "sha256:4", rating=4),
-            _entry("five.jpg", "sha256:5", rating=5),
+            _entry("three.jpg", "3", rating=3),
+            _entry("four.jpg", "4", rating=4),
+            _entry("five.jpg", "5", rating=5),
         ],
     )
     result = await search_photos(
