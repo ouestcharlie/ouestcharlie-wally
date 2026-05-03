@@ -496,6 +496,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "mcp", extra = ["cli"] },
+    { name = "ouestcharlie-imageproc" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -512,6 +513,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "mcp", extras = ["cli"], specifier = ">=1.27" },
+    { name = "ouestcharlie-imageproc", specifier = "~=1.0" },
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pytest-asyncio", specifier = ">=1.3.0" },
