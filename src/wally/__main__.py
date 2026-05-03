@@ -75,7 +75,12 @@ async def _serve(app: object, sock: socket.socket, port: int, media: MediaMiddle
         # before signalling Woof.  Emitting WALLY_READY too early (before
         # server.serve() runs startup) causes connection failures on Windows
         # where import/startup overhead is larger than on macOS/Linux.
+        # Also check should_exit: if uvicorn's lifespan startup fails it sets
+        # should_exit=True and returns from serve() without setting started=True,
+        # which would otherwise leave this loop spinning until Woof kills the process.
         while not server.started:
+            if server.should_exit:
+                return
             await asyncio.sleep(0.05)
         sys.stdout.write(f"WALLY_READY port={port}\n")
         sys.stdout.flush()

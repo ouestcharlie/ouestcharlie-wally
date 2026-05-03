@@ -19,8 +19,8 @@ import logging
 from typing import Any
 from urllib.parse import unquote
 
+from ouestcharlie_imageproc.image_proc import PersistentImageProc
 from ouestcharlie_toolkit.backend import backend_from_config
-from ouestcharlie_toolkit.image_proc import PersistentImageProc
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
 from ouestcharlie_toolkit.schema import preview_jpeg_path
