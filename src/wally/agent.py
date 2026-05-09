@@ -331,8 +331,8 @@ def _match_to_dict(m: PhotoMatch) -> dict:
             d[fdef.name] = value
     if m.tile_index is not None:
         d["tileIndex"] = m.tile_index
-    if m.avif_path is not None:
-        d["avifPath"] = m.avif_path
+    if m.avif_hash is not None:
+        d["avifHash"] = m.avif_hash
     if m.thumbnail_cols is not None:
         d["thumbnailCols"] = m.thumbnail_cols
     if m.thumbnail_tile_size is not None:

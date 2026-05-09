@@ -1,7 +1,7 @@
 """Wally media middleware — thumbnail and preview serving via the backend abstraction.
 
 URL scheme:
-  GET /thumbnails/{backend_name}/{partition}/thumbnails.avif
+  GET /thumbnail/{backend_name}/{partition}/{avif_hash}
   GET /previews/{backend_name}/{partition}/{content_hash}.jpg
 
 Implemented as a pure-ASGI middleware that wraps the MCP app.  All I/O
@@ -23,7 +23,7 @@ from ouestcharlie_imageproc.image_proc import PersistentImageProc
 from ouestcharlie_toolkit.backend import backend_from_config
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
-from ouestcharlie_toolkit.schema import preview_jpeg_path
+from ouestcharlie_toolkit.schema import preview_jpeg_path, thumbnail_avif_path
 
 _log = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class MediaMiddleware:
             if path.startswith("/previews/"):
                 await self._handle_preview(path, send)
                 return
-            if path.startswith("/thumbnails/"):
+            if path.startswith("/thumbnail/"):
                 await self._handle_thumbnail(path, send)
                 return
         await self._app(scope, receive, send)
@@ -152,23 +152,22 @@ class MediaMiddleware:
             event.set()
 
     async def _handle_thumbnail(self, path: str, send: Any) -> None:
-        # path = "/thumbnails/{backend_name}/{avif_path}"
-        # where avif_path is the backend-relative path, e.g.:
-        #   ".ouestcharlie/2024/Jul/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+        # path = "/thumbnail/{backend_name}/{partition}/{avif_hash}"
+        # partition may contain slashes; avif_hash is the last segment.
         parts = path.lstrip("/").split("/", 2)
         if len(parts) < 3:
             await _send_error(send, 404)
             return
-        _, url_backend, backend_path = parts
+        _, url_backend, rest = parts
         if url_backend != self._backend_name:
             await _send_error(send, 404)
             return
-        filename = backend_path.rsplit("/", 1)[-1]
-        if not (
-            filename.startswith("thumbnails-") or filename.startswith("previews-")
-        ) or not filename.endswith(".avif"):
+        rest_parts = rest.rsplit("/", 1)
+        if len(rest_parts) != 2:
             await _send_error(send, 404)
             return
+        partition, avif_hash = rest_parts
+        backend_path = thumbnail_avif_path(partition, avif_hash)
         try:
             data, _ = await self._backend.read(backend_path)
         except FileNotFoundError:

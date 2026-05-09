@@ -29,7 +29,6 @@ from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
     LeafManifest,
     ManifestSummary,
-    thumbnail_avif_path,
 )
 
 _log = logging.getLogger(__name__)
@@ -130,7 +129,7 @@ class PhotoMatch:
 
     # Thumbnail tile location (None when no thumbnails exist for this photo)
     tile_index: int | None
-    avif_path: str | None  # backend-relative path to the chunk AVIF file
+    avif_hash: str | None  # hash of the AVIF chunk file (identifies the grid)
     thumbnail_cols: int | None  # columns in the AVIF grid
     thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
 
@@ -245,12 +244,11 @@ async def _handle_leaf(
     """Scan a leaf manifest, appending each matching entry to result."""
     result.partitions_scanned += 1
 
-    # Build O(1) chunk-aware lookup: content_hash → (avif_path, tile_index, cols, tile_size)
+    # Build O(1) chunk-aware lookup: content_hash → (avif_hash, tile_index, cols, tile_size)
     thumb_lookup: dict[str, tuple[str, int, int, int]] = {}
     for chunk in manifest.thumbnail_chunks:
-        chunk_path = thumbnail_avif_path(manifest.partition, chunk.avif_hash)
         for i, h in enumerate(chunk.grid.photo_order):
-            thumb_lookup[h] = (chunk_path, i, chunk.grid.cols, chunk.grid.tile_size)
+            thumb_lookup[h] = (chunk.avif_hash, i, chunk.grid.cols, chunk.grid.tile_size)
 
     for entry in manifest.photos:
         if not _matches(entry, predicate, field_config):
@@ -263,7 +261,7 @@ async def _handle_leaf(
                 content_hash=entry.content_hash,
                 searchable=dict(entry.searchable),
                 tile_index=thumb[1] if thumb else None,
-                avif_path=thumb[0] if thumb else None,
+                avif_hash=thumb[0] if thumb else None,
                 thumbnail_cols=thumb[2] if thumb else None,
                 thumbnail_tile_size=thumb[3] if thumb else None,
                 file_path=_file_path(manifest.partition, entry.filename),

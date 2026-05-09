@@ -474,9 +474,8 @@ async def test_tile_index_none_when_no_thumbnail_chunks(
 
 
 @pytest.mark.asyncio
-async def test_avif_path_propagated_to_match(store: ManifestStore, backend: LocalBackend) -> None:
-    """avif_path on PhotoMatch points to the specific chunk AVIF file."""
-    avif_path = f"{METADATA_DIR}/2024/07/thumbnails-Kf3QzA2_nBcR8xYvLm1P9w.avif"
+async def test_avif_hash_propagated_to_match(store: ManifestStore, backend: LocalBackend) -> None:
+    """avif_hash on PhotoMatch is the chunk's avif_hash."""
     chunk = ThumbnailChunk(
         avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
         grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["aa"]),
@@ -484,7 +483,7 @@ async def test_avif_path_propagated_to_match(store: ManifestStore, backend: Loca
     await _leaf(store, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
     result = await search_photos(backend, SearchPredicate(), root="2024/07")
     assert len(result.matches) == 1
-    assert result.matches[0].avif_path == avif_path
+    assert result.matches[0].avif_hash == "Kf3QzA2_nBcR8xYvLm1P9w"
 
 
 @pytest.mark.asyncio
@@ -729,7 +728,7 @@ async def test_date_filter_strips_timezone(store: ManifestStore, backend: LocalB
 
 @pytest.mark.asyncio
 async def test_multi_chunk_tile_lookup(store: ManifestStore, backend: LocalBackend) -> None:
-    """Photos in different chunks get the correct avif_path and tile_index."""
+    """Photos in different chunks get the correct avif_hash and tile_index."""
     chunk_a = ThumbnailChunk(
         avif_hash="AAAA",
         grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["a"]),
@@ -750,9 +749,9 @@ async def test_multi_chunk_tile_lookup(store: ManifestStore, backend: LocalBacke
     result = await search_photos(backend, SearchPredicate())
     ma = next(x for x in result.matches if x.filename == "a.jpg")
     mb = next(x for x in result.matches if x.filename == "b.jpg")
-    assert ma.avif_path == f"{METADATA_DIR}/thumbnails-AAAA.avif"
+    assert ma.avif_hash == "AAAA"
     assert ma.tile_index == 0
-    assert mb.avif_path == f"{METADATA_DIR}/thumbnails-BBBB.avif"
+    assert mb.avif_hash == "BBBB"
     assert mb.tile_index == 0
 
 
