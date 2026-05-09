@@ -486,22 +486,6 @@ async def test_avif_hash_propagated_to_match(store: ManifestStore, backend: Loca
     assert result.matches[0].avif_hash == "Kf3QzA2_nBcR8xYvLm1P9w"
 
 
-@pytest.mark.asyncio
-async def test_file_path_root_partition(store: ManifestStore, backend: LocalBackend) -> None:
-    """file_path for the root partition is just the filename."""
-    await _leaf(store, "", [_entry("photo.jpg", "xx")])
-    result = await search_photos(backend, SearchPredicate())
-    assert result.matches[0].file_path == "photo.jpg"
-
-
-@pytest.mark.asyncio
-async def test_file_path_nested_partition(store: ManifestStore, backend: LocalBackend) -> None:
-    """file_path for a nested partition includes the partition prefix."""
-    await _leaf(store, "Vacations/Italy", [_entry("DSC_001.jpg", "xx")])
-    result = await search_photos(backend, SearchPredicate(), root="Vacations/Italy")
-    assert result.matches[0].file_path == "Vacations/Italy/DSC_001.jpg"
-
-
 # ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------

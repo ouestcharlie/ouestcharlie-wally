@@ -133,9 +133,6 @@ class PhotoMatch:
     thumbnail_cols: int | None  # columns in the AVIF grid
     thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
 
-    # Path for "open with Finder / file system"
-    file_path: str  # partition + "/" + filename, relative to backend root
-
 
 @dataclass
 class SearchResult:
@@ -264,7 +261,6 @@ async def _handle_leaf(
                 avif_hash=thumb[0] if thumb else None,
                 thumbnail_cols=thumb[2] if thumb else None,
                 thumbnail_tile_size=thumb[3] if thumb else None,
-                file_path=_file_path(manifest.partition, entry.filename),
             )
         )
 
@@ -418,9 +414,3 @@ def _matches(
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
-
-
-def _file_path(partition: str, filename: str) -> str:
-    """Relative path to the original photo file."""
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{filename}"

@@ -147,7 +147,7 @@ class WallyAgent(AgentBase):
 
             Returns:
                 ``matches`` — list of matching photo records, each containing
-                    ``partition``, ``filename``, ``contentHash``, ``filePath``,
+                    ``partition``, ``filename``, ``contentHash``,
                     and optionally ``dateTaken``, ``rating``, ``tags``,
                     ``tileIndex``, ``thumbnailsPath``, ``previewsPath``.
                 ``partitionsScanned`` — leaf manifests fully evaluated.
@@ -314,7 +314,6 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         "partition": m.partition,
         "filename": m.filename,
         "contentHash": m.content_hash,
-        "filePath": m.file_path,
     }
     for fdef in PHOTO_FIELDS:
         value = m.searchable.get(fdef.entry_attr)
