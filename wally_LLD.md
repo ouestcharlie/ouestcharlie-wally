@@ -52,7 +52,7 @@ tests/
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
 
-**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `thumbnailsPath`, `thumbnailCols`, `thumbnailTileSize` (thumbnail grid fields, present when the partition has been thumbnailed), plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key.
+**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `avifHash`, plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key.
 
 The `contentHash` field doubles as the preview JPEG identifier: the gallery constructs the preview URL as `http://127.0.0.1:<wally_port>/previews/<backend>/<partition>/<contentHash>.jpg` without needing a separate manifest field.
 

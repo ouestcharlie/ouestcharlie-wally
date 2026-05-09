@@ -6,6 +6,7 @@ import calendar
 from datetime import datetime
 
 from mcp.server.fastmcp import Context
+from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.schema import serialize_summary
@@ -214,12 +215,15 @@ class WallyAgent(AgentBase):
                 partitions_done = count
                 await report_progress(ctx, count, count + 1, f"scanned {partition}")
 
-            result = await search_photos(
-                self.backend,
-                predicate=predicate,
-                root=root,
-                on_progress=_on_progress,
-            )
+            try:
+                result = await search_photos(
+                    self.backend,
+                    predicate=predicate,
+                    root=root,
+                    on_progress=_on_progress,
+                )
+            except Exception as exc:
+                raise ToolError(str(exc)) from exc
 
             return {
                 "matches": [_match_to_dict(m) for m in result.matches],
@@ -332,6 +336,4 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["tileIndex"] = m.tile_index
     if m.avif_hash is not None:
         d["avifHash"] = m.avif_hash
-    if m.thumbnail_cols is not None:
-        d["thumbnailCols"] = m.thumbnail_cols
     return d

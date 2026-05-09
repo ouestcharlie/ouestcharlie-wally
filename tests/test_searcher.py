@@ -14,6 +14,7 @@ from ouestcharlie_toolkit.schema import (
     LeafManifest,
     ManifestSummary,
     PhotoEntry,
+    RootSummary,
     ThumbnailChunk,
     ThumbnailGridLayout,
 )
@@ -439,7 +440,6 @@ async def test_tile_index_computed_correctly(store: ManifestStore, backend: Loca
     chunk = ThumbnailChunk(
         avif_hash="HASH22CHARSEXAMPLE" + "XXXX",
         grid=ThumbnailGridLayout(
-            cols=3,
             rows=1,
             tile_size=256,
             photo_order=["aaa", "bbb", "ccc"],
@@ -478,7 +478,7 @@ async def test_avif_hash_propagated_to_match(store: ManifestStore, backend: Loca
     """avif_hash on PhotoMatch is the chunk's avif_hash."""
     chunk = ThumbnailChunk(
         avif_hash="Kf3QzA2_nBcR8xYvLm1P9w",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["aa"]),
+        grid=ThumbnailGridLayout(rows=1, tile_size=256, photo_order=["aa"]),
     )
     await _leaf(store, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
     result = await search_photos(backend, SearchPredicate(), root="2024/07")
@@ -497,6 +497,18 @@ async def test_missing_root_manifest_returns_empty_result(backend: LocalBackend)
     result = await search_photos(backend, SearchPredicate())
     assert result.matches == []
     assert result.errors == 0
+
+
+@pytest.mark.asyncio
+async def test_schema_version_mismatch_returns_error(
+    store: ManifestStore, backend: LocalBackend
+) -> None:
+    """summary.json with an outdated schemaVersion returns an error and no matches."""
+    stale = RootSummary(schema_version=SCHEMA_VERSION - 1, partitions=[])
+    await store.create_summary(stale)
+
+    with pytest.raises(ValueError, match=("full index")):
+        await search_photos(backend, SearchPredicate())
 
 
 @pytest.mark.asyncio
@@ -715,11 +727,11 @@ async def test_multi_chunk_tile_lookup(store: ManifestStore, backend: LocalBacke
     """Photos in different chunks get the correct avif_hash and tile_index."""
     chunk_a = ThumbnailChunk(
         avif_hash="AAAA",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["a"]),
+        grid=ThumbnailGridLayout(rows=1, tile_size=256, photo_order=["a"]),
     )
     chunk_b = ThumbnailChunk(
         avif_hash="BBBB",
-        grid=ThumbnailGridLayout(cols=1, rows=1, tile_size=256, photo_order=["b"]),
+        grid=ThumbnailGridLayout(rows=1, tile_size=256, photo_order=["b"]),
     )
     manifest = LeafManifest(
         schema_version=SCHEMA_VERSION,
