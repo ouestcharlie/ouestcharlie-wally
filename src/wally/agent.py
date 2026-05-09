@@ -6,6 +6,7 @@ import calendar
 from datetime import datetime
 
 from mcp.server.fastmcp import Context
+from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.schema import serialize_summary
@@ -147,7 +148,7 @@ class WallyAgent(AgentBase):
 
             Returns:
                 ``matches`` — list of matching photo records, each containing
-                    ``partition``, ``filename``, ``contentHash``, ``filePath``,
+                    ``partition``, ``filename``, ``contentHash``,
                     and optionally ``dateTaken``, ``rating``, ``tags``,
                     ``tileIndex``, ``thumbnailsPath``, ``previewsPath``.
                 ``partitionsScanned`` — leaf manifests fully evaluated.
@@ -214,12 +215,15 @@ class WallyAgent(AgentBase):
                 partitions_done = count
                 await report_progress(ctx, count, count + 1, f"scanned {partition}")
 
-            result = await search_photos(
-                self.backend,
-                predicate=predicate,
-                root=root,
-                on_progress=_on_progress,
-            )
+            try:
+                result = await search_photos(
+                    self.backend,
+                    predicate=predicate,
+                    root=root,
+                    on_progress=_on_progress,
+                )
+            except Exception as exc:
+                raise ToolError(str(exc)) from exc
 
             return {
                 "matches": [_match_to_dict(m) for m in result.matches],
@@ -314,7 +318,6 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         "partition": m.partition,
         "filename": m.filename,
         "contentHash": m.content_hash,
-        "filePath": m.file_path,
     }
     for fdef in PHOTO_FIELDS:
         value = m.searchable.get(fdef.entry_attr)
@@ -331,10 +334,6 @@ def _match_to_dict(m: PhotoMatch) -> dict:
             d[fdef.name] = value
     if m.tile_index is not None:
         d["tileIndex"] = m.tile_index
-    if m.avif_path is not None:
-        d["avifPath"] = m.avif_path
-    if m.thumbnail_cols is not None:
-        d["thumbnailCols"] = m.thumbnail_cols
-    if m.thumbnail_tile_size is not None:
-        d["thumbnailTileSize"] = m.thumbnail_tile_size
+    if m.avif_hash is not None:
+        d["avifHash"] = m.avif_hash
     return d

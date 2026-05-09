@@ -34,9 +34,9 @@ _AVIF_FILENAME = f"thumbnails-{_CHUNK_HASH}.avif"
 
 @pytest.fixture()
 def backend_root(tmp_path: Path) -> Path:
-    partition = tmp_path / "2024" / "2024-07" / ".ouestcharlie"
-    partition.mkdir(parents=True)
-    (partition / _AVIF_FILENAME).write_bytes(FAKE_AVIF)
+    avif_dir = tmp_path / ".ouestcharlie" / "2024" / "2024-07"
+    avif_dir.mkdir(parents=True)
+    (avif_dir / _AVIF_FILENAME).write_bytes(FAKE_AVIF)
     return tmp_path
 
 
@@ -45,9 +45,7 @@ async def test_thumbnail_served(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(
-            f"/thumbnails/{BACKEND_NAME}/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}"
-        )
+        resp = await client.get(f"/thumbnail/{BACKEND_NAME}/2024/2024-07/{_CHUNK_HASH}")
     assert resp.status_code == 200
     assert resp.content == FAKE_AVIF
     assert resp.headers["content-type"] == "image/avif"
@@ -58,7 +56,7 @@ async def test_thumbnail_wrong_backend_returns_404(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(f"/thumbnails/wronglib/2024/2024-07/.ouestcharlie/{_AVIF_FILENAME}")
+        resp = await client.get(f"/thumbnail/wronglib/2024/2024-07/{_CHUNK_HASH}")
     assert resp.status_code == 404
 
 
@@ -67,9 +65,7 @@ async def test_thumbnail_missing_file_returns_404(backend_root: Path) -> None:
     app = _make_app(backend_root)
     transport = httpx.ASGITransport(app=app)  # type: ignore[arg-type]
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.get(
-            f"/thumbnails/{BACKEND_NAME}/2024/2024-08/.ouestcharlie/{_AVIF_FILENAME}"
-        )
+        resp = await client.get(f"/thumbnail/{BACKEND_NAME}/2024/2024-08/{_CHUNK_HASH}")
     assert resp.status_code == 404
 
 

@@ -27,9 +27,9 @@ from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
+    SCHEMA_VERSION,
     LeafManifest,
     ManifestSummary,
-    thumbnail_avif_path,
 )
 
 _log = logging.getLogger(__name__)
@@ -130,12 +130,7 @@ class PhotoMatch:
 
     # Thumbnail tile location (None when no thumbnails exist for this photo)
     tile_index: int | None
-    avif_path: str | None  # backend-relative path to the chunk AVIF file
-    thumbnail_cols: int | None  # columns in the AVIF grid
-    thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
-
-    # Path for "open with Finder / file system"
-    file_path: str  # partition + "/" + filename, relative to backend root
+    avif_hash: str | None  # hash of the AVIF chunk file (identifies the grid)
 
 
 @dataclass
@@ -195,9 +190,15 @@ async def search_photos(
         return result
     except Exception as exc:
         _log.error("Failed to read summary.json: %s", exc)
-        result.errors += 1
-        result.error_details.append(f"summary.json: {exc}")
-        return result
+        raise Exception(f"summary.json: {exc}") from exc
+
+    if summary.schema_version != SCHEMA_VERSION:
+        msg = (
+            f"Library index schema version {summary.schema_version} does not match "
+            f"expected version {SCHEMA_VERSION}. Run a full index to upgrade."
+        )
+        _log.error(msg)
+        raise ValueError(msg)
 
     # Filter to the requested subtree if root is specified.
     partitions_to_scan = summary.partitions
@@ -245,12 +246,11 @@ async def _handle_leaf(
     """Scan a leaf manifest, appending each matching entry to result."""
     result.partitions_scanned += 1
 
-    # Build O(1) chunk-aware lookup: content_hash → (avif_path, tile_index, cols, tile_size)
-    thumb_lookup: dict[str, tuple[str, int, int, int]] = {}
+    # Build O(1) chunk-aware lookup: content_hash → (avif_hash, tile_index)
+    thumb_lookup: dict[str, tuple[str, int]] = {}
     for chunk in manifest.thumbnail_chunks:
-        chunk_path = thumbnail_avif_path(manifest.partition, chunk.avif_hash)
         for i, h in enumerate(chunk.grid.photo_order):
-            thumb_lookup[h] = (chunk_path, i, chunk.grid.cols, chunk.grid.tile_size)
+            thumb_lookup[h] = (chunk.avif_hash, i)
 
     for entry in manifest.photos:
         if not _matches(entry, predicate, field_config):
@@ -263,10 +263,7 @@ async def _handle_leaf(
                 content_hash=entry.content_hash,
                 searchable=dict(entry.searchable),
                 tile_index=thumb[1] if thumb else None,
-                avif_path=thumb[0] if thumb else None,
-                thumbnail_cols=thumb[2] if thumb else None,
-                thumbnail_tile_size=thumb[3] if thumb else None,
-                file_path=_file_path(manifest.partition, entry.filename),
+                avif_hash=thumb[0] if thumb else None,
             )
         )
 
@@ -420,9 +417,3 @@ def _matches(
 # ---------------------------------------------------------------------------
 # Path helpers
 # ---------------------------------------------------------------------------
-
-
-def _file_path(partition: str, filename: str) -> str:
-    """Relative path to the original photo file."""
-    prefix = partition.rstrip("/") + "/" if partition else ""
-    return f"{prefix}{filename}"
