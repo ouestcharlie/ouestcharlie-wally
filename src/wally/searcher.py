@@ -131,7 +131,6 @@ class PhotoMatch:
     tile_index: int | None
     avif_hash: str | None  # hash of the AVIF chunk file (identifies the grid)
     thumbnail_cols: int | None  # columns in the AVIF grid
-    thumbnail_tile_size: int | None  # tile edge in pixels (tiles are square)
 
 
 @dataclass
@@ -242,10 +241,10 @@ async def _handle_leaf(
     result.partitions_scanned += 1
 
     # Build O(1) chunk-aware lookup: content_hash → (avif_hash, tile_index, cols, tile_size)
-    thumb_lookup: dict[str, tuple[str, int, int, int]] = {}
+    thumb_lookup: dict[str, tuple[str, int, int]] = {}
     for chunk in manifest.thumbnail_chunks:
         for i, h in enumerate(chunk.grid.photo_order):
-            thumb_lookup[h] = (chunk.avif_hash, i, chunk.grid.cols, chunk.grid.tile_size)
+            thumb_lookup[h] = (chunk.avif_hash, i, chunk.grid.cols)
 
     for entry in manifest.photos:
         if not _matches(entry, predicate, field_config):
@@ -260,7 +259,6 @@ async def _handle_leaf(
                 tile_index=thumb[1] if thumb else None,
                 avif_hash=thumb[0] if thumb else None,
                 thumbnail_cols=thumb[2] if thumb else None,
-                thumbnail_tile_size=thumb[3] if thumb else None,
             )
         )
 

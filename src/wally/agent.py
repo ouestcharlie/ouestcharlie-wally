@@ -334,6 +334,4 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["avifHash"] = m.avif_hash
     if m.thumbnail_cols is not None:
         d["thumbnailCols"] = m.thumbnail_cols
-    if m.thumbnail_tile_size is not None:
-        d["thumbnailTileSize"] = m.thumbnail_tile_size
     return d
