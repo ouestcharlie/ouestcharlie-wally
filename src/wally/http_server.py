@@ -20,8 +20,9 @@ from typing import Any
 from urllib.parse import unquote
 
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
+from ouestcharlie_toolkit import Backend
 from ouestcharlie_toolkit.backend import backend_from_config
-from ouestcharlie_toolkit.manifest import ManifestStore
+from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex, _esc, row_to_photo_entry
 from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
 from ouestcharlie_toolkit.schema import preview_jpeg_path, thumbnail_avif_path
 
@@ -193,20 +194,20 @@ async def _send_error(send: Any, status: int) -> None:
 
 
 async def _generate_preview(
-    backend: Any,
+    backend: Backend,
     partition: str,
     content_hash: str,
-    image_proc: Any,
+    image_proc: PersistentImageProc,
 ) -> None:
-    """Find the photo entry in the leaf manifest and generate its JPEG preview."""
-    manifest_store = ManifestStore(backend)
-
-    leaf, _ = await manifest_store.read_leaf(partition)
-    entry = next((e for e in leaf.photos if e.content_hash == content_hash), None)
-    if entry is None:
+    """Look up the photo entry in the LanceDB index and generate its JPEG preview."""
+    lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
+    query = f"content_hash = '{_esc(content_hash)}' AND partition = '{_esc(partition)}'"
+    rows = await lance_index.search_where(query)
+    if not rows:
         raise FileNotFoundError(
             f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"
         )
+    entry = row_to_photo_entry(rows[0])
 
     _log.debug(
         "Generating preview: hash=%r filename=%r partition=%r",

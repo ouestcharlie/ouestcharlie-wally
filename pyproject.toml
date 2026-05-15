@@ -4,9 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ouestcharlie-wally"
-version = "0.7.0"
+version = "0.8.0"
 description = "OuEstCharlie Wally — photo search/consumption agent"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE*"]
@@ -21,7 +21,7 @@ dependencies = [
     "mcp>=1.27",
     "starlette>=0.40",
     "uvicorn>=0.30",
-    "ouestcharlie-py-toolkit>=0.7.0",
+    "ouestcharlie-py-toolkit>=0.8.0",
 ]
 
 [project.urls]
@@ -43,7 +43,7 @@ testpaths = ["tests"]
 tmp_path_retention_policy = "none"
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
 line-length = 100
 
 [tool.ruff.lint]
@@ -53,7 +53,7 @@ select = ["E", "F", "W", "I", "UP", "B", "SIM"]
 "src/wally/__main__.py" = ["E402"]  # logging must be configured before wally modules are imported
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.13"
 strict = true
 
 [dependency-groups]

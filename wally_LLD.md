@@ -18,8 +18,10 @@ src/wally/
 ├── http_server.py  # MediaMiddleware: pure-ASGI middleware for thumbnail and preview serving
 └── searcher.py     # Pure async search logic — no MCP dependency, independently testable
 tests/
+├── test_gps_filter.py   # GPS bounding box filter end-to-end tests
 ├── test_http_server.py
-└── test_searcher.py
+├── test_searcher.py
+└── test_where_clause.py # Unit tests for _build_where_clause SQL generation
 ```
 
 `searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers tools with FastMCP and handles MCP-layer concerns (date string parsing, progress reporting, result dict serialization). 
@@ -47,8 +49,8 @@ tests/
 | Field | Type | Description |
 |---|---|---|
 | `matches` | `PhotoMatch[]` | Matching photo records (see below) |
-| `partitionsScanned` | `int` | Leaf manifests fully evaluated |
-| `partitionsPruned` | `int` | Subtrees skipped by summary pruning |
+| `partitionsScanned` | `int` | Distinct partitions represented in the result set |
+| `partitionsPruned` | `int` | Always 0 — filtering is handled entirely by LanceDB's query engine |
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
 
@@ -134,95 +136,60 @@ An `asyncio.Lock` guards a `dict[str, asyncio.Event]` keyed by `"{partition}:{co
 | `WOOF_AGENT_TOKEN` | Injected by Woof | Security token for the HTTP server |
 | `WOOF_BACKEND_CONFIG` | Injected by Woof | JSON backend config (`{"type": "filesystem", "root": "..."}`) passed to `backend_from_config()` |
 
-## Query Execution: Two-Level Pruning
+## Query Execution: LanceDB SQL Query
 
-From [query_design.md](../ouestcharlie/query_design.md) § Query Execution.
+Wally queries the LanceDB columnar index at `.ouestcharlie/index.lance/` using a single SQL WHERE clause built from the `SearchPredicate`. All filter predicates are translated by `_build_where_clause` in `searcher.py` and evaluated by LanceDB's query engine in one pass — no per-partition file reads or hierarchical traversal.
 
-### Level 1 — Parent manifest pruning
+Before executing the query, `search_photos` reads `summary.json` to verify `schemaVersion`. A version mismatch raises `ValueError` with a message prompting a full re-index.
 
-Read `ParentManifest.children` (list of `PartitionSummary`). For each child, check whether its summary statistics prove no photo can possibly match:
+### SQL clause mapping
 
-| Pruning condition | Triggered when |
+| Predicate field | SQL clause |
 |---|---|
-| Date (lower) | `summary.date_max < predicate.date_min` |
-| Date (upper) | `summary.date_min > predicate.date_max` |
-| Rating (lower) | `summary.rating_max < predicate.rating_min` |
-| Rating (upper) | `summary.rating_min > predicate.rating_max` |
+| `date_min` / `date_max` | `date_taken >= TIMESTAMP 'YYYY-MM-DD HH:MM:SS'` / `date_taken <= …` |
+| `rating_min` / `rating_max` | `rating >= N` / `rating <= N` |
+| `tags` (AND) | `array_has(tags, 'value')` per tag |
+| `make` / `model` | `lower(col) LIKE '%substring%'` |
+| `gps` bounding box | `gps_lat IS NOT NULL AND gps_lon IS NOT NULL [AND gps_lat >= … AND …]` |
 
-Conservative: if a summary bound is `None` (unknown), that dimension is never pruned. Tags and camera fields have no V1 pruning (bloom filters deferred — full leaf scan instead).
+`_esc` (imported from `lance_index`) doubles single quotes in string values to prevent SQL injection.
 
-### Level 2 — Leaf manifest scan
+A `GpsBoxFilter` with all-None bounds still produces `gps_lat IS NOT NULL AND gps_lon IS NOT NULL` — ensuring photos without GPS data are excluded.
 
-For each non-pruned partition, read `LeafManifest.photos` and evaluate the full predicate per `PhotoEntry`:
+### `root` parameter
 
-| Predicate field | Match rule |
-|---|---|
-| `date_min` / `date_max` | `entry.date_taken` in `[date_min, date_max]`; `None` date excluded by any date bound |
-| `tags` | All listed tags in `entry.tags` (AND) |
-| `rating_min` / `rating_max` | `entry.rating` in `[rating_min, rating_max]`; `None` excluded by any bound |
-| `make` | `predicate.make.lower() in entry.make.lower()`; `None` excluded |
-| `model` | `predicate.model.lower() in entry.model.lower()`; `None` excluded |
+When `root` is non-empty, a partition prefix condition is prepended to the WHERE clause:
+`(partition = '<root>' OR starts_with(partition, '<root>/'))` — restricting results to the specified subtree without a separate traversal pass.
 
-## Manifest Traversal
+### Result assembly
 
-The traversal starts at `root` (default `""`). The manifest at each path can be either a `LeafManifest` or a `ParentManifest`.
+Each row returned by LanceDB is converted to a `PhotoMatch`:
 
-**Disambiguation**: `ManifestStore.read_any(partition)` reads the raw JSON and routes based on the presence of the `photos` key (leaf) or `children` key (parent). This avoids speculative try/except dispatch that would double I/O on every parent node.
+- `partition`, `filename`, `content_hash`: passed through directly.
+- `thumbnail_avif_hash`, `thumbnail_tile_index`: flat nullable columns. `None` when no thumbnail has been generated for the photo.
+- `searchable`: rebuilt from typed columns by `_row_to_searchable` (GPS as tuple, tags as list, dates as `datetime`).
 
-**Algorithm** (`_traverse` in `searcher.py`):
-```
-traverse(partition):
-    manifest = read_any(partition)
-    if missing → return (silent, not an error)
-    if error   → increment errors, continue
+`partitions_scanned` is the count of distinct `partition` values across all matches — computed post-query.
+`partitions_pruned` is always 0; partition-level filtering is handled by LanceDB internally.
 
-    if ParentManifest:
-        for each child in manifest.children:
-            if can_prune(child.summary, predicate) → pruned++
-            else → traverse(child.path)
+## Date Handling and Timezone Stripping
 
-    if LeafManifest:
-        partitions_scanned++
-        build tile_index dict from thumbnail_grid.photo_order
-        for each entry in manifest.photos:
-            if matches(entry, predicate) → append PhotoMatch
-```
-
-## Tile Index Computation
-
-Each `LeafManifest` has `thumbnail_grid.photo_order: list[str]` — content hashes in row-major tile order, sorted by hash for stability. For a matching photo, its tile index is its position in this list.
-
-To avoid O(n) `list.index()` per photo, `_handle_leaf()` inverts the list into a `dict[hash → index]` once per leaf manifest (O(n) once, then O(1) per lookup):
-
-```python
-thumb_index = {h: i for i, h in enumerate(manifest.thumbnail_grid.photo_order)}
-tile_index = thumb_index.get(entry.content_hash)  # O(1)
-```
-
-`tile_index` is `None` when the leaf has no `thumbnail_grid` (partition not yet thumbnailed).
-
-## Date Handling
-
-All datetime comparisons use timezone-naive values to avoid `TypeError` when mixing aware and naive datetimes (the same pattern as `whitebeard/indexer.py`):
-
-```python
-def _naive(dt: datetime) -> datetime:
-    return dt.replace(tzinfo=None)
-```
+LanceDB stores `date_taken` as a timezone-naive timestamp. SQL literals in WHERE clauses are also naive (`TIMESTAMP 'YYYY-MM-DD HH:MM:SS'`). Timezone-aware `datetime` values from `RangeFilter.lo` / `hi` have their timezone stripped with `.replace(tzinfo=None)` before formatting.
 
 Partial date strings (`"2024"`, `"2024-07"`) are expanded in `agent.py` to full `datetime` bounds before passing to `searcher.py`. The searcher works only with `datetime | None`.
 
 ## Result Ordering
 
-V1: results are returned in manifest traversal order — alphabetical by partition path, then in the order entries appear in each leaf manifest. No date-based sorting. This is an acknowledged limitation (see OP-Q3 in [query_design.md](../ouestcharlie/query_design.md)).
+V1: results are returned in LanceDB scan order (undefined within a query). No date-based sorting. This is an acknowledged limitation (see OP-Q3 in [query_design.md](../ouestcharlie/query_design.md)).
 
 ## Error Handling
 
 | Situation | Behavior |
 |---|---|
-| No manifest at root | Empty `SearchResult`, `errors == 0` (unindexed library) |
-| No manifest at a child path | Silent skip (partition not yet indexed) |
-| Corrupt/invalid JSON | `errors += 1`, message in `error_details`, traversal continues |
+| `summary.json` absent | Empty `SearchResult`, `errors == 0` (unindexed library) |
+| `summary.json` schema version mismatch | `ValueError` raised — user must run a full re-index |
+| LanceDB index absent despite valid `summary.json` | `ValueError` raised — index is corrupt or incomplete |
+| LanceDB query failure | `errors += 1`, message in `error_details`, empty matches returned |
 | Progress notification failure | Caught and logged at DEBUG; search continues |
 
 ## MCP Tools Summary
