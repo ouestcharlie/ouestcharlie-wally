@@ -19,7 +19,7 @@ from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
-from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex, _esc
+from ouestcharlie_toolkit.lance_index import PAGE_SIZE, PHOTO_TABLE_NAME, LanceIndex, _esc
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
     SCHEMA_VERSION,
@@ -132,10 +132,12 @@ class SearchResult:
     """Aggregated result of a search_photos call."""
 
     matches: list[PhotoMatch] = field(default_factory=list)
-    partitions_scanned: int = 0  # leaf manifests fully evaluated
-    partitions_pruned: int = 0  # subtrees skipped by summary stats
     errors: int = 0
     error_details: list[str] = field(default_factory=list)
+    total_count: int = 0
+    page: int = 1
+    page_size: int = PAGE_SIZE
+    has_more: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +151,9 @@ async def search_photos(
     root: str = "",
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
     field_config: list[FieldDef] | None = None,
+    sort_by: str = "date_taken",
+    sort_order: str = "desc",
+    page: int = 1,
 ) -> SearchResult:
     """Search all photos matching predicate using the LanceDB columnar index.
 
@@ -162,13 +167,16 @@ async def search_photos(
         backend:      Backend to search (read-only).
         predicate:    Filter to apply. An empty predicate matches all photos.
         root:         Subtree to search (default "" = entire backend).
-        on_progress:  Optional async callback(partitions_scanned, partition)
+        on_progress:  Optional async callback(1, partition)
                       invoked once after the query completes.
         field_config: Field definitions driving match and filter logic.
                       Defaults to PHOTO_FIELDS from ouestcharlie_toolkit.fields.
+        sort_by:      Column to sort by (default "date_taken").
+        sort_order:   "asc" or "desc" (default "desc").
+        page:         1-indexed page number (default 1).
 
     Returns:
-        SearchResult with all matching PhotoMatch entries.
+        SearchResult with one page of matching PhotoMatch entries and pagination metadata.
     """
     if field_config is None:
         field_config = PHOTO_FIELDS
@@ -200,14 +208,20 @@ async def search_photos(
 
     where_clause = _build_where_clause(predicate, field_config)
     try:
-        rows = await lance_index.search_where(where_clause, root)
+        rows_iter, total_count = await lance_index.search_where(
+            where_clause,
+            root,
+            order_by=sort_by,
+            order_desc=(sort_order == "desc"),
+            page=page - 1,
+        )
     except Exception as exc:
         _log.error("LanceDB search failed: %s", exc, exc_info=True)
         result.errors += 1
         result.error_details.append(str(exc))
         return result
 
-    for row in rows:
+    async for row in rows_iter:
         avif_hash = row.get("thumbnail_avif_hash") or None
         tile_index_raw = row.get("thumbnail_tile_index")
         result.matches.append(
@@ -224,10 +238,13 @@ async def search_photos(
         )
 
     unique_partitions = {m.partition for m in result.matches}
-    result.partitions_scanned = len(unique_partitions)
+    result.total_count = total_count
+    result.page = page
+    result.page_size = PAGE_SIZE
+    result.has_more = (page * PAGE_SIZE) < total_count
 
     if on_progress is not None and unique_partitions:
-        await on_progress(result.partitions_scanned, "")
+        await on_progress(1, "")
 
     return result
 

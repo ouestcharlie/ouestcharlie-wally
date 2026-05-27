@@ -33,26 +33,31 @@ tests/
 
 **Input** (all fields optional):
 
-| Field | Type | Description |
-|---|---|---|
-| `date_min` | `string` | Inclusive lower bound on `date_taken`. Partial dates accepted: `"2024"` → `2024-01-01T00:00:00`, `"2024-07"` → `2024-07-01T00:00:00` |
-| `date_max` | `string` | Inclusive upper bound. `"2024-07"` → `2024-07-31T23:59:59` |
-| `tags` | `string[]` | All tags must be present (AND semantics). Matches `dc:subject` values |
-| `rating_min` | `int` | Minimum `xmp:Rating` (0=unrated, 1–5=stars, -1=rejected) |
-| `rating_max` | `int` | Maximum `xmp:Rating` |
-| `make` | `string` | Case-insensitive substring match on `tiff:Make` |
-| `model` | `string` | Case-insensitive substring match on `tiff:Model` |
-| `root` | `string` | Subtree to search (default `""` = entire library) |
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `date_min` | `string` | — | Inclusive lower bound on `date_taken`. Partial dates accepted: `"2024"` → `2024-01-01T00:00:00`, `"2024-07"` → `2024-07-01T00:00:00` |
+| `date_max` | `string` | — | Inclusive upper bound. `"2024-07"` → `2024-07-31T23:59:59` |
+| `tags` | `string[]` | — | All tags must be present (AND semantics). Matches `dc:subject` values |
+| `rating_min` | `int` | — | Minimum `xmp:Rating` (0=unrated, 1–5=stars, -1=rejected) |
+| `rating_max` | `int` | — | Maximum `xmp:Rating` |
+| `make` | `string` | — | Case-insensitive substring match on `tiff:Make` |
+| `model` | `string` | — | Case-insensitive substring match on `tiff:Model` |
+| `root` | `string` | `""` | Subtree to search (`""` = entire library) |
+| `sort_by` | `string` | `"date_taken"` | Column to sort by |
+| `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"` |
+| `page` | `int` | `1` | 1-indexed page number; converted to 0-indexed before passing to `LanceIndex.search_where` |
 
 **Output**:
 
 | Field | Type | Description |
 |---|---|---|
-| `matches` | `PhotoMatch[]` | Matching photo records (see below) |
-| `partitionsScanned` | `int` | Distinct partitions represented in the result set |
-| `partitionsPruned` | `int` | Always 0 — filtering is handled entirely by LanceDB's query engine |
+| `totalCount` | `int` | Total number of matching photos across all pages |
+| `page` | `int` | Current 1-indexed page number |
+| `pageSize` | `int` | Page size (500) |
+| `hasMore` | `bool` | `true` when further pages exist |
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
+| `matches` | `PhotoMatch[]` | One page of matching photo records (up to `pageSize`) |
 
 **PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `avifHash`, plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key.
 
@@ -113,8 +118,9 @@ request arrives
   │                 │
   │                 └─ new → _generate_preview(backend, partition, content_hash, image_proc)
   │                               │
-  │                               1. ManifestStore.read_leaf(partition)
-  │                               2. find PhotoEntry by content_hash
+  │                               1. lance_index.search_where(
+  │                                    "content_hash=… AND partition=…", page_size=1)
+  │                               2. reconstruct PhotoEntry via row_to_photo_entry
   │                               3. generate_preview_jpeg(backend, partition, entry,
   │                                    image_proc=self._image_proc)
   │                                  (stages photo → PersistentImageProc.request → backend write)
@@ -169,18 +175,17 @@ Each row returned by LanceDB is converted to a `PhotoMatch`:
 - `thumbnail_avif_hash`, `thumbnail_tile_index`: flat nullable columns. `None` when no thumbnail has been generated for the photo.
 - `searchable`: rebuilt from typed columns by `_row_to_searchable` (GPS as tuple, tags as list, dates as `datetime`).
 
-`partitions_scanned` is the count of distinct `partition` values across all matches — computed post-query.
-`partitions_pruned` is always 0; partition-level filtering is handled by LanceDB internally.
-
 ## Date Handling and Timezone Stripping
 
 LanceDB stores `date_taken` as a timezone-naive timestamp. SQL literals in WHERE clauses are also naive (`TIMESTAMP 'YYYY-MM-DD HH:MM:SS'`). Timezone-aware `datetime` values from `RangeFilter.lo` / `hi` have their timezone stripped with `.replace(tzinfo=None)` before formatting.
 
 Partial date strings (`"2024"`, `"2024-07"`) are expanded in `agent.py` to full `datetime` bounds before passing to `searcher.py`. The searcher works only with `datetime | None`.
 
-## Result Ordering
+## Result Ordering and Pagination
 
-V1: results are returned in LanceDB scan order (undefined within a query). No date-based sorting. This is an acknowledged limitation (see OP-Q3 in [query_design.md](../ouestcharlie/query_design.md)).
+Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` direction (default `desc` — newest first). Sorting is performed in Python via `pa.Table.sort_by()` after fetching all matching rows with `to_arrow()`, because `AsyncQuery.order_by()` is not available in lancedb 0.30.2. When it ships, the sort can move to the DB level.
+
+Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` returns `(AsyncIterator[dict], total_count)` — callers iterate the page with `async for` and use `total_count` to compute `hasMore`.
 
 ## Error Handling
 
@@ -212,7 +217,6 @@ V1: results are returned in LanceDB scan order (undefined within a query). No da
 
 **Deferred:**
 - Tag bloom filter pruning at parent level (OP from query_design.md)
-- Result ordering by date (OP-Q3)
-- Pagination
+- DB-level sort via `AsyncQuery.order_by()` (pending lancedb release)
 - Cross-backend deduplication (Woof's responsibility — OP-Q4)
 - Lucene DSL string input (lives in Woof for album definitions; Woof passes structured predicates to Wally)

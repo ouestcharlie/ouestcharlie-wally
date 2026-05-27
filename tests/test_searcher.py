@@ -531,16 +531,6 @@ async def test_multi_partition_search(backend: LocalBackend) -> None:
     )
     filenames = {m.filename for m in result.matches}
     assert filenames == {"jan.jpg", "jul1.jpg", "jul2.jpg"}
-    assert result.partitions_scanned == 2
-
-
-@pytest.mark.asyncio
-async def test_partitions_scanned_counter(backend: LocalBackend) -> None:
-    """partitions_scanned counts unique partitions that returned matches."""
-    await _leaf(backend, "p1", [_entry("a.jpg", "aa")])
-    await _leaf(backend, "p2", [_entry("b.jpg", "bb")])
-    result = await search_photos(backend, SearchPredicate())
-    assert result.partitions_scanned == 2
 
 
 # ---------------------------------------------------------------------------
@@ -744,7 +734,6 @@ async def test_deep_nesting_traversal(backend: LocalBackend) -> None:
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "deep.jpg"
-    assert result.partitions_scanned == 1
 
 
 @pytest.mark.asyncio
@@ -771,7 +760,6 @@ async def test_deep_nesting_two_partitions_one_matches(backend: LocalBackend) ->
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
-    assert result.partitions_scanned == 1
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +781,7 @@ async def test_on_progress_called_after_search(backend: LocalBackend) -> None:
     await search_photos(backend, SearchPredicate(), on_progress=_cb)
 
     assert len(calls) == 1
-    assert calls[0][0] == 2  # 2 unique partitions matched
+    assert calls[0][0] == 1  # single pass, single progress
 
 
 # ---------------------------------------------------------------------------
