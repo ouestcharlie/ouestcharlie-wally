@@ -153,7 +153,7 @@ async def search_photos(
     field_config: list[FieldDef] | None = None,
     sort_by: str = "date_taken",
     sort_order: str = "desc",
-    page: int = 1,
+    page: int = 0,
 ) -> SearchResult:
     """Search all photos matching predicate using the LanceDB columnar index.
 
@@ -173,7 +173,7 @@ async def search_photos(
                       Defaults to PHOTO_FIELDS from ouestcharlie_toolkit.fields.
         sort_by:      Column to sort by (default "date_taken").
         sort_order:   "asc" or "desc" (default "desc").
-        page:         1-indexed page number (default 1).
+        page:         0-indexed page number (default 0).
 
     Returns:
         SearchResult with one page of matching PhotoMatch entries and pagination metadata.
@@ -213,7 +213,7 @@ async def search_photos(
             root,
             order_by=sort_by,
             order_desc=(sort_order == "desc"),
-            page=page - 1,
+            page=page,
         )
     except Exception as exc:
         _log.error("LanceDB search failed: %s", exc, exc_info=True)
@@ -241,7 +241,7 @@ async def search_photos(
     result.total_count = total_count
     result.page = page
     result.page_size = PAGE_SIZE
-    result.has_more = (page * PAGE_SIZE) < total_count
+    result.has_more = ((page + 1) * PAGE_SIZE) < total_count
 
     if on_progress is not None and unique_partitions:
         await on_progress(1, "")
