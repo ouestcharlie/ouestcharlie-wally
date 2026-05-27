@@ -139,7 +139,6 @@ async def test_disjoint_partition_returns_no_results(backend: LocalBackend) -> N
         ),
     )
     assert len(result.matches) == 0
-    assert result.partitions_scanned == 0
 
 
 @pytest.mark.asyncio
@@ -153,7 +152,6 @@ async def test_overlapping_partition_returns_match(backend: LocalBackend) -> Non
             filters={"gps": GpsBoxFilter(min_lat=48.5, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
         ),
     )
-    assert result.partitions_scanned == 1
     assert len(result.matches) == 1
 
 
@@ -171,7 +169,6 @@ async def test_no_gps_summary_still_searched(backend: LocalBackend) -> None:
             filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
         ),
     )
-    assert result.partitions_scanned == 1
     assert len(result.matches) == 1
 
 
@@ -306,5 +303,4 @@ async def test_partition_bbox_touches_filter_box_photo_matches(backend: LocalBac
             filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
         ),
     )
-    assert result.partitions_scanned == 1
     assert len(result.matches) == 1

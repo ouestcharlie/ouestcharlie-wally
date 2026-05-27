@@ -110,6 +110,9 @@ class WallyAgent(AgentBase):
             ctx: Context,
             filters: dict | None = None,
             root: str = "",
+            sort_by: str = "date_taken",
+            sort_order: str = "desc",
+            page: int = 1,
         ) -> dict:
             """Search photos matching structured predicates.
 
@@ -156,13 +159,6 @@ class WallyAgent(AgentBase):
                 ``errors`` — count of manifest read failures.
                 ``errorDetails`` — per-failure error messages.
             """
-            if not root and not filters:
-                raise ValueError(
-                    "Refusing unfiltered search over the entire backend. "
-                    "Use get_partition_summaries to browse the library overview, "
-                    "or provide at least one filter (e.g. dateTaken, tags, rating) "
-                    "or a non-empty root to scope the search."
-                )
 
             _check_filters(filters)
 
@@ -221,16 +217,21 @@ class WallyAgent(AgentBase):
                     predicate=predicate,
                     root=root,
                     on_progress=_on_progress,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                    page=page,
                 )
             except Exception as exc:
                 raise ToolError(str(exc)) from exc
 
             return {
-                "matches": [_match_to_dict(m) for m in result.matches],
-                "partitionsScanned": result.partitions_scanned,
-                "partitionsPruned": result.partitions_pruned,
+                "totalCount": result.total_count,
+                "page": result.page,
+                "pageSize": result.page_size,
+                "hasMore": result.has_more,
                 "errors": result.errors,
                 "errorDetails": result.error_details,
+                "matches": [_match_to_dict(m) for m in result.matches],
             }
 
 
