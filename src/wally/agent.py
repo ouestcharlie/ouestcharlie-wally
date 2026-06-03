@@ -112,7 +112,7 @@ class WallyAgent(AgentBase):
             root: str = "",
             sort_by: str = "date_taken",
             sort_order: str = "desc",
-            page: int = 1,
+            page: int = 0,
         ) -> dict:
             """Search photos matching structured predicates.
 

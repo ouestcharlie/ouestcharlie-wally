@@ -45,16 +45,16 @@ tests/
 | `root` | `string` | `""` | Subtree to search (`""` = entire library) |
 | `sort_by` | `string` | `"date_taken"` | Column to sort by |
 | `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"` |
-| `page` | `int` | `1` | 1-indexed page number; converted to 0-indexed before passing to `LanceIndex.search_where` |
+| `page` | `int` | `0` | 0-indexed page number; passed directly to `LanceIndex.search_where` |
 
 **Output**:
 
 | Field | Type | Description |
 |---|---|---|
 | `totalCount` | `int` | Total number of matching photos across all pages |
-| `page` | `int` | Current 1-indexed page number |
+| `page` | `int` | Current 0-indexed page number |
 | `pageSize` | `int` | Page size (500) |
-| `hasMore` | `bool` | `true` when further pages exist |
+| `hasMore` | `bool` | `true` when further pages exist (`(page + 1) * pageSize < totalCount`) |
 | `errors` | `int` | Manifest read failures |
 | `errorDetails` | `string[]` | Per-failure messages |
 | `matches` | `PhotoMatch[]` | One page of matching photo records (up to `pageSize`) |
