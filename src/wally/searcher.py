@@ -18,7 +18,13 @@ from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
-from ouestcharlie_toolkit.lance_index import PAGE_SIZE, PHOTO_TABLE_NAME, LanceIndex, _esc
+from ouestcharlie_toolkit.lance_index import (
+    PAGE_SIZE,
+    PHOTO_TABLE_NAME,
+    FtsFilter,
+    LanceIndex,
+    _esc,
+)
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import SCHEMA_VERSION
 
@@ -122,6 +128,9 @@ class PhotoMatch:
     tile_index: int | None
     avif_hash: str | None  # hash of the AVIF chunk file (identifies the grid)
 
+    # FTS relevance score — present only when a description full-text search was performed
+    score: float | None = None
+
 
 @dataclass
 class SearchResult:
@@ -146,6 +155,7 @@ async def search_photos(
     backend: Backend,
     predicate: SearchPredicate,
     partitions: list[str] | None = None,
+    fts_filter: FtsFilter | None = None,
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
     field_config: list[FieldDef] | None = None,
     sort_by: str = "date_taken",
@@ -210,6 +220,7 @@ async def search_photos(
         rows_iter, total_count, tag_facets = await lance_index.search_where(
             where_clause,
             partitions=partitions or None,
+            fts_filter=fts_filter,
             order_by=sort_by,
             order_desc=(sort_order == "desc"),
             page=page,
@@ -225,6 +236,7 @@ async def search_photos(
     async for row in rows_iter:
         avif_hash = row.get("thumbnail_avif_hash") or None
         tile_index_raw = row.get("thumbnail_tile_index")
+        score_raw = row.get("_score")
         result.matches.append(
             PhotoMatch(
                 partition=row["partition"],
@@ -235,6 +247,7 @@ async def search_photos(
                 if avif_hash is not None and tile_index_raw is not None
                 else None,
                 avif_hash=avif_hash,
+                score=float(score_raw) if score_raw is not None else None,
             )
         )
 
@@ -259,9 +272,13 @@ def _build_where_clause(
     predicate: SearchPredicate,
     field_config: list[FieldDef],
 ) -> str | None:
-    """Build a SQL WHERE clause string from a SearchPredicate.
+    """Build a SQL WHERE clause from a SearchPredicate.
 
-    Returns None if the predicate has no active filters (match all).
+    TEXT fields are handled separately via ``fts_filter`` passed to
+    ``search_where`` — they produce no SQL clause here.
+
+    Returns:
+        SQL WHERE expression (without the WHERE keyword), or None.
     """
     clauses: list[str] = []
 
@@ -295,6 +312,10 @@ def _build_where_clause(
         elif isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
             col = fdef.entry_attr
             clauses.append(f"lower({col}) LIKE '%{_esc(fv.value.lower())}%'")
+
+        elif fdef.type is FieldType.TEXT:
+            _log.warning(f"Attempt to filter on a full text field '{fdef.entry_attr}', skipped")
+            pass  # handled via fts_filter, not SQL
 
         elif isinstance(fv, GpsBoxFilter) and fdef.type is FieldType.GPS_BOX:
             # Always require non-null GPS when this filter is present.

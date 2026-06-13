@@ -12,17 +12,7 @@ Wally is the search/consumption agent for OuEstCharlie. It is **stateless and re
 
 ## Repository Structure
 
-```
-src/wally/
-├── __main__.py   # Entry point (stdio MCP server)
-├── agent.py      # WallyAgent(AgentBase) — MCP tool registration, date parsing
-└── searcher.py   # Pure async search logic — no MCP dependency, independently testable
-
-tests/
-└── test_searcher.py
-```
-
-`searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers the tool with FastMCP and handles date string parsing and result serialization.
+See [wally_LLD.md](wally_LLD.md)
 
 ## Installation
 
@@ -43,10 +33,8 @@ uv sync
 
 ## Running Tests
 
-**Always use `.venv/bin/python -m pytest`:**
-
 ```bash
-.venv/bin/python -m pytest tests/ -v
+.venv/bin/pytest tests/ -v
 ```
 
 ## MCP Inspector
