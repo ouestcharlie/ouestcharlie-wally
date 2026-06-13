@@ -14,17 +14,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
 from ouestcharlie_toolkit.lance_index import PAGE_SIZE, PHOTO_TABLE_NAME, LanceIndex, _esc
 from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import (
-    SCHEMA_VERSION,
-    ManifestSummary,
-)
+from ouestcharlie_toolkit.schema import SCHEMA_VERSION
 
 _log = logging.getLogger(__name__)
 
@@ -138,6 +134,7 @@ class SearchResult:
     page: int = 1
     page_size: int = PAGE_SIZE
     has_more: bool = False
+    tag_facets: dict[str, int] = field(default_factory=dict)  # {tag: count} over full result set
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +145,7 @@ class SearchResult:
 async def search_photos(
     backend: Backend,
     predicate: SearchPredicate,
-    root: str = "",
+    partitions: list[str] | None = None,
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
     field_config: list[FieldDef] | None = None,
     sort_by: str = "date_taken",
@@ -166,7 +163,8 @@ async def search_photos(
     Args:
         backend:      Backend to search (read-only).
         predicate:    Filter to apply. An empty predicate matches all photos.
-        root:         Subtree to search (default "" = entire backend).
+        partitions:   Explicit list of partition paths to include.
+                      None or empty means all partitions.
         on_progress:  Optional async callback(1, partition)
                       invoked once after the query completes.
         field_config: Field definitions driving match and filter logic.
@@ -176,7 +174,8 @@ async def search_photos(
         page:         0-indexed page number (default 0).
 
     Returns:
-        SearchResult with one page of matching PhotoMatch entries and pagination metadata.
+        SearchResult with one page of matching PhotoMatch entries, pagination metadata,
+        and tag_facets counts computed over the full (unpaginated) result set.
     """
     if field_config is None:
         field_config = PHOTO_FIELDS
@@ -208,9 +207,9 @@ async def search_photos(
 
     where_clause = _build_where_clause(predicate, field_config)
     try:
-        rows_iter, total_count = await lance_index.search_where(
+        rows_iter, total_count, tag_facets = await lance_index.search_where(
             where_clause,
-            root,
+            partitions=partitions or None,
             order_by=sort_by,
             order_desc=(sort_order == "desc"),
             page=page,
@@ -220,6 +219,8 @@ async def search_photos(
         result.errors += 1
         result.error_details.append(str(exc))
         return result
+
+    result.tag_facets = tag_facets
 
     async for row in rows_iter:
         avif_hash = row.get("thumbnail_avif_hash") or None
@@ -277,7 +278,10 @@ def _build_where_clause(
                 ts = fv.hi.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
                 clauses.append(f"date_taken <= TIMESTAMP '{ts}'")
 
-        elif isinstance(fv, RangeFilter) and fdef.type is FieldType.INT_RANGE:
+        elif isinstance(fv, RangeFilter) and fdef.type in (
+            FieldType.INT_RANGE,
+            FieldType.FLOAT_RANGE,
+        ):
             col = fdef.entry_attr
             if fv.lo is not None:
                 clauses.append(f"{col} >= {fv.lo}")
@@ -322,151 +326,3 @@ def _row_to_searchable(row: dict[str, Any], field_config: list[FieldDef]) -> dic
         else:
             searchable[fdef.entry_attr] = row.get(fdef.entry_attr)
     return searchable
-
-
-# ---------------------------------------------------------------------------
-# Pruning and matching — config-driven (kept for tests and future use)
-# ---------------------------------------------------------------------------
-
-
-def _naive(dt: datetime) -> datetime:
-    """Return timezone-naive datetime for safe min/max comparison.
-
-    Mirrors the same helper in whitebeard/indexer.py.
-    """
-    return dt.replace(tzinfo=None)
-
-
-def _can_prune(
-    summary: ManifestSummary,
-    predicate: SearchPredicate,
-    field_config: list[FieldDef],
-) -> bool:
-    """Return True if this partition's summary proves no photo can match.
-
-    Dispatches on field type:
-    - DATE_RANGE / INT_RANGE: checks whether the filter range is disjoint from
-      the partition's min/max stats.
-    - GPS_BOX: checks whether the filter bounding box is disjoint from the
-      partition's GPS bbox stats.
-
-    Conservative: if a summary bound is None (unknown), never prune on
-    that dimension. STRING_COLLECTION and STRING_MATCH require full leaf scan.
-    """
-    for fdef in field_config:
-        fv = predicate.filters.get(fdef.name)
-        if fv is None:
-            continue
-
-        if fdef.type in (FieldType.DATE_RANGE, FieldType.INT_RANGE) and isinstance(fv, RangeFilter):
-            field_stat = getattr(summary, fdef.name) if fdef.summary_range else None
-            s_max = field_stat["max"] if field_stat else None
-            s_min = field_stat["min"] if field_stat else None
-            use_naive = fdef.type == FieldType.DATE_RANGE
-
-            if fv.lo is not None and s_max is not None:
-                cmp_s_max = _naive(s_max) if use_naive else s_max
-                cmp_lo = _naive(fv.lo) if use_naive else fv.lo
-                if cmp_s_max < cmp_lo:
-                    return True
-
-            if fv.hi is not None and s_min is not None:
-                cmp_s_min = _naive(s_min) if use_naive else s_min
-                cmp_hi = _naive(fv.hi) if use_naive else fv.hi
-                if cmp_s_min > cmp_hi:
-                    return True
-
-        elif fdef.type is FieldType.GPS_BOX and isinstance(fv, GpsBoxFilter):
-            field_stat = getattr(summary, fdef.name, None)
-            if field_stat is None:
-                continue  # no bbox in summary — conservative, don't prune
-            lat_stat = field_stat.get("lat", {})
-            lon_stat = field_stat.get("lon", {})
-            p_min_lat = lat_stat.get("min")
-            p_max_lat = lat_stat.get("max")
-            p_min_lon = lon_stat.get("min")
-            p_max_lon = lon_stat.get("max")
-            if None in (p_min_lat, p_max_lat, p_min_lon, p_max_lon):
-                continue  # incomplete summary — conservative, don't prune
-            if fv.min_lat is not None and p_max_lat < fv.min_lat:
-                return True  # partition fully south of filter box
-            if fv.max_lat is not None and p_min_lat > fv.max_lat:
-                return True  # partition fully north of filter box
-            if fv.min_lon is not None and p_max_lon < fv.min_lon:
-                return True  # partition fully west of filter box
-            if fv.max_lon is not None and p_min_lon > fv.max_lon:
-                return True  # partition fully east of filter box
-
-    return False
-
-
-def _matches(
-    entry: object,
-    predicate: SearchPredicate,
-    field_config: list[FieldDef],
-) -> bool:
-    """Return True if entry satisfies all predicate constraints.
-
-    Iterates over field_config, looking up each field's filter in the
-    predicate. An absent filter is a wildcard. Dispatch is by filter
-    value type (RangeFilter, CollectionFilter, StringFilter).
-
-    entry is typed as object to avoid circular imports at call site;
-    duck-typed attribute access is safe because callers always pass
-    PhotoEntry instances.
-    """
-    for fdef in field_config:
-        fv = predicate.filters.get(fdef.name)
-        if fv is None:
-            continue  # field not constrained — wildcard
-
-        entry_val = entry.searchable.get(fdef.entry_attr)  # type: ignore[attr-defined]
-
-        if isinstance(fv, RangeFilter):
-            # None entry value is excluded by any range bound.
-            if entry_val is None:
-                return False
-            if fdef.type == FieldType.DATE_RANGE:
-                v = _naive(entry_val)
-                if fv.lo is not None and v < _naive(fv.lo):
-                    return False
-                if fv.hi is not None and v > _naive(fv.hi):
-                    return False
-            else:  # INT_RANGE
-                if fv.lo is not None and entry_val < fv.lo:
-                    return False
-                if fv.hi is not None and entry_val > fv.hi:
-                    return False
-
-        elif isinstance(fv, CollectionFilter):
-            # All required values must be present (AND semantics).
-            collection = entry_val or []
-            for required in fv.values:
-                if required not in collection:
-                    return False
-
-        elif isinstance(fv, StringFilter):
-            # Case-insensitive substring; None entry is excluded.
-            if entry_val is None or fv.value.lower() not in entry_val.lower():
-                return False
-
-        elif isinstance(fv, GpsBoxFilter):
-            # Point-in-bbox match; None entry (no GPS data) is excluded.
-            if entry_val is None:
-                return False
-            lat, lon = entry_val
-            if fv.min_lat is not None and lat < fv.min_lat:
-                return False
-            if fv.max_lat is not None and lat > fv.max_lat:
-                return False
-            if fv.min_lon is not None and lon < fv.min_lon:
-                return False
-            if fv.max_lon is not None and lon > fv.max_lon:
-                return False
-
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Path helpers
-# ---------------------------------------------------------------------------

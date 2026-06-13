@@ -452,7 +452,7 @@ async def test_avif_hash_propagated_to_match(backend: LocalBackend) -> None:
         grid=ThumbnailGridLayout(rows=1, tile_size=256, photo_order=["aa"]),
     )
     await _leaf(backend, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
-    result = await search_photos(backend, SearchPredicate(), root="2024/07")
+    result = await search_photos(backend, SearchPredicate(), partitions=["2024/07"])
     assert len(result.matches) == 1
     assert result.matches[0].avif_hash == "Kf3QzA2_nBcR8xYvLm1P9w"
 
@@ -709,11 +709,11 @@ async def test_multi_chunk_tile_lookup(backend: LocalBackend) -> None:
 
 @pytest.mark.asyncio
 async def test_root_parameter_limits_search_to_subtree(backend: LocalBackend) -> None:
-    """root= restricts search to the specified subtree, ignoring sibling partitions."""
+    """partitions= restricts search to explicit partition list, ignoring others."""
     await _leaf(backend, "2024/07", [_entry("july.jpg", "j1")])
     await _leaf(backend, "2023/12", [_entry("dec.jpg", "d1")])
 
-    result = await search_photos(backend, SearchPredicate(), root="2024/07")
+    result = await search_photos(backend, SearchPredicate(), partitions=["2024/07"])
     assert len(result.matches) == 1
     assert result.matches[0].filename == "july.jpg"
 
