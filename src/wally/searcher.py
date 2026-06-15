@@ -217,7 +217,7 @@ async def search_photos(
 
     where_clause = _build_where_clause(predicate, field_config)
     try:
-        rows_iter, total_count, tag_facets = await lance_index.search_where(
+        matches, total_count, tag_facets = await lance_index.search_where(
             where_clause,
             partitions=partitions or None,
             fts_filter=fts_filter,
@@ -233,7 +233,7 @@ async def search_photos(
 
     result.tag_facets = tag_facets
 
-    async for row in rows_iter:
+    for row in matches:
         avif_hash = row.get("thumbnail_avif_hash") or None
         tile_index_raw = row.get("thumbnail_tile_index")
         score_raw = row.get("_score")
