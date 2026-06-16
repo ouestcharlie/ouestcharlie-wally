@@ -315,7 +315,7 @@ def _build_where_clause(
 
         elif fdef.type is FieldType.TEXT:
             _log.warning(f"Attempt to filter on a full text field '{fdef.entry_attr}', skipped")
-            pass  # handled via fts_filter, not SQL
+            # handled via fts_filter, not SQL
 
         elif isinstance(fv, GpsBoxFilter) and fdef.type is FieldType.GPS_BOX:
             # Always require non-null GPS when this filter is present.
