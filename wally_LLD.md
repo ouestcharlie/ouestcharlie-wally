@@ -18,10 +18,12 @@ src/wally/
 ├── http_server.py  # MediaMiddleware: pure-ASGI middleware for thumbnail and preview serving
 └── searcher.py     # Pure async search logic — no MCP dependency, independently testable
 tests/
-├── test_gps_filter.py   # GPS bounding box filter end-to-end tests
+├── test_full_text_filter.py  # FTS filter validation and TEXT-field WHERE clause behaviour
+├── test_gps_filter.py        # GPS bounding box filter end-to-end tests
 ├── test_http_server.py
+├── test_search_validation.py # Unknown filter field rejection
 ├── test_searcher.py
-└── test_where_clause.py # Unit tests for _build_where_clause SQL generation
+└── test_where_clause.py      # Unit tests for _build_where_clause SQL generation
 ```
 
 `searcher.py` has no MCP dependency and can be unit-tested directly. `agent.py` is the thin adapter that registers tools with FastMCP and handles MCP-layer concerns (date string parsing, progress reporting, result dict serialization). 
@@ -35,17 +37,12 @@ tests/
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `date_min` | `string` | — | Inclusive lower bound on `date_taken`. Partial dates accepted: `"2024"` → `2024-01-01T00:00:00`, `"2024-07"` → `2024-07-01T00:00:00` |
-| `date_max` | `string` | — | Inclusive upper bound. `"2024-07"` → `2024-07-31T23:59:59` |
-| `tags` | `string[]` | — | All tags must be present (AND semantics). Matches `dc:subject` values |
-| `rating_min` | `int` | — | Minimum `xmp:Rating` (0=unrated, 1–5=stars, -1=rejected) |
-| `rating_max` | `int` | — | Maximum `xmp:Rating` |
-| `make` | `string` | — | Case-insensitive substring match on `tiff:Make` |
-| `model` | `string` | — | Case-insensitive substring match on `tiff:Model` |
-| `root` | `string` | `""` | Subtree to search (`""` = entire library) |
-| `sort_by` | `string` | `"date_taken"` | Column to sort by |
-| `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"` |
-| `page` | `int` | `0` | 0-indexed page number; passed directly to `LanceIndex.search_where` |
+| `filters` | `object` | — | Dict mapping field names to filter values. Use `list_search_fields` to discover available fields and their formats. Supported filter types: date range, int/float range, string collection (AND), string substring, GPS bounding box. |
+| `full_text_filter` | `object` | — | Full-text search over one or more `TEXT`-typed fields. Shape: `{"query": "Canyon", "columns": ["description"]}`. `query` is a single string applied across all listed columns; `columns` must be `entry_attr` names of `FieldType.TEXT` fields (see `list_search_fields → full_text_search.fields`). Results are relevance-ranked and each match includes `score`. Compatible with `filters`. |
+| `partitions` | `string[]` | — | Explicit partition paths to search. When non-empty, an unfiltered scan of those partitions is allowed. |
+| `sort_by` | `string` | `"date_taken"` | Column to sort by (ignored when `full_text_filter` is set — results are relevance-ranked). |
+| `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"`. |
+| `page` | `int` | `0` | 0-indexed page number; passed directly to `LanceIndex.search_where`. |
 
 **Output**:
 
@@ -55,11 +52,12 @@ tests/
 | `page` | `int` | Current 0-indexed page number |
 | `pageSize` | `int` | Page size (500) |
 | `hasMore` | `bool` | `true` when further pages exist (`(page + 1) * pageSize < totalCount`) |
-| `errors` | `int` | Manifest read failures |
+| `errors` | `int` | Query failures |
 | `errorDetails` | `string[]` | Per-failure messages |
+| `tagFacets` | `object` | `{tag: count}` map over the full (unpaginated) result set |
 | `matches` | `PhotoMatch[]` | One page of matching photo records (up to `pageSize`) |
 
-**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `avifHash`, plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key.
+**PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `avifHash`, plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key. When a `full_text_filter` was applied, each match also includes `score` (LanceDB relevance score, higher is better).
 
 The `contentHash` field doubles as the preview JPEG identifier: the gallery constructs the preview URL as `http://127.0.0.1:<wally_port>/previews/<backend>/<partition>/<contentHash>.jpg` without needing a separate manifest field.
 
@@ -152,15 +150,20 @@ Before executing the query, `search_photos` reads `summary.json` to verify `sche
 
 | Predicate field | SQL clause |
 |---|---|
-| `date_min` / `date_max` | `date_taken >= TIMESTAMP 'YYYY-MM-DD HH:MM:SS'` / `date_taken <= …` |
-| `rating_min` / `rating_max` | `rating >= N` / `rating <= N` |
+| `dateTaken` range | `date_taken >= TIMESTAMP 'YYYY-MM-DD HH:MM:SS'` / `date_taken <= …` |
+| int/float range (rating, width, …) | `col >= N` / `col <= N` |
 | `tags` (AND) | `array_has(tags, 'value')` per tag |
-| `make` / `model` | `lower(col) LIKE '%substring%'` |
-| `gps` bounding box | `gps_lat IS NOT NULL AND gps_lon IS NOT NULL [AND gps_lat >= … AND …]` |
+| string match (make, model, …) | `lower(col) LIKE '%substring%'` |
+| GPS bounding box | `gps_lat IS NOT NULL AND gps_lon IS NOT NULL [AND gps_lat >= … AND …]` |
+| `FieldType.TEXT` fields | **No SQL clause** — handled via `full_text_filter` / LanceDB FTS |
 
 `_esc` (imported from `lance_index`) doubles single quotes in string values to prevent SQL injection.
 
 A `GpsBoxFilter` with all-None bounds still produces `gps_lat IS NOT NULL AND gps_lon IS NOT NULL` — ensuring photos without GPS data are excluded.
+
+### Full-text search path
+
+When `full_text_filter` is provided, `search_where` uses LanceDB's `nearest_to_text(query, columns=[...])` instead of `order_by` + `offset` + `limit`. Results are returned in relevance order; `_score` is included automatically by LanceDB and exposed per match. SQL `filters` are still applied on top (the base query is built with the same `where_clause`). `FieldType.TEXT` fields in `filters` are silently skipped — they produce no SQL clause.
 
 ### `root` parameter
 
@@ -183,9 +186,11 @@ Partial date strings (`"2024"`, `"2024-07"`) are expanded in `agent.py` to full 
 
 ## Result Ordering and Pagination
 
-Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` direction (default `desc` — newest first). Sorting is performed in Python via `pa.Table.sort_by()` after fetching all matching rows with `to_arrow()`, because `AsyncQuery.order_by()` is not available in lancedb 0.30.2. When it ships, the sort can move to the DB level.
+Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` direction (default `desc` — newest first) using LanceDB's native `AsyncQuery.order_by(List[ColumnOrdering])`. A `filename` tiebreaker is always appended to make pagination deterministic when the primary key (e.g. `date_taken`) is NULL or duplicated across rows.
 
-Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` returns `(AsyncIterator[dict], total_count)` — callers iterate the page with `async for` and use `total_count` to compute `hasMore`.
+When `full_text_filter` is set, results are ranked by relevance instead (`nearest_to_text`) — `sort_by` / `sort_order` are ignored.
+
+Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` returns `(AsyncIterator[dict], total_count, tag_facets)` — callers iterate the page with `async for`, use `total_count` to compute `hasMore`, and expose `tag_facets` as a `{tag: count}` map over the full unpaginated result set.
 
 ## Error Handling
 
@@ -209,14 +214,16 @@ Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` retur
 ## Scope and Deferred Items
 
 **In scope:**
-- Predicates: date range, tags (AND, full scan), rating range, camera make/model substring
+- Predicates: date range, tags (AND), rating range, camera make/model substring, GPS bounding box
+- Full-text search over `TEXT`-typed fields (currently `description`) via `full_text_filter`
+- Relevance-ranked results with `score` per match when FTS is used
+- `tagFacets` aggregation over the full result set
+- Native LanceDB sort with deterministic `filename` tiebreaker
+- Result pagination (500 photos per page)
 - Single backend per Woof invocation
 - On-demand JPEG preview generation and caching
-- No result pagination
-- No manifest caching (Woof concern — OP-Q5)
 
 **Deferred:**
 - Tag bloom filter pruning at parent level (OP from query_design.md)
-- DB-level sort via `AsyncQuery.order_by()` (pending lancedb release)
 - Cross-backend deduplication (Woof's responsibility — OP-Q4)
 - Lucene DSL string input (lives in Woof for album definitions; Woof passes structured predicates to Wally)

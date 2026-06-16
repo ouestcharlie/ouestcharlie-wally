@@ -9,6 +9,7 @@ from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import serialize_summary
 from ouestcharlie_toolkit.server import AgentBase
 
@@ -67,10 +68,12 @@ class WallyAgent(AgentBase):
                     'partial dates supported: "2024", "2024-07", "2024-07-14")'
                 ),
                 FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
+                FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
                 FieldType.STRING_COLLECTION: (
                     "list of strings (AND semantics — all must be present)"
                 ),
                 FieldType.STRING_MATCH: "string (case-insensitive substring match)",
+                FieldType.TEXT: "full-text search — use full_text_filter, not filters",
                 FieldType.GPS_BOX: (
                     '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
                     "— decimal degrees bounding box; photos outside the box are excluded. "
@@ -78,16 +81,31 @@ class WallyAgent(AgentBase):
                 ),
                 FieldType.DESCRIPTIVE: "not yet implemented",
             }
+            sql_fields = [
+                {
+                    "name": fdef.name,
+                    "type": fdef.type.name,
+                    "filterFormat": _FORMAT[fdef.type],
+                    "pruneable": fdef.summary_range,
+                }
+                for fdef in PHOTO_FIELDS
+                if fdef.type is not FieldType.TEXT
+            ]
+            text_fields = [
+                {"name": fdef.name, "column": fdef.entry_attr, "label": fdef.label or fdef.name}
+                for fdef in PHOTO_FIELDS
+                if fdef.type is FieldType.TEXT
+            ]
             return {
-                "fields": [
-                    {
-                        "name": fdef.name,
-                        "type": fdef.type.name,
-                        "filterFormat": _FORMAT[fdef.type],
-                        "pruneable": fdef.summary_range or fdef.summary_gps_bbox,
-                    }
-                    for fdef in PHOTO_FIELDS
-                ]
+                "fields": sql_fields,
+                "full_text_search": {
+                    "description": (
+                        "Search across one or more text fields with a single query string. "
+                        "Results are relevance-ranked and include a _score per match. "
+                        'Pass via full_text_filter={"query": "...", "columns": [...]}.'
+                    ),
+                    "fields": text_fields,
+                },
             }
 
         @mcp.tool()
@@ -109,33 +127,29 @@ class WallyAgent(AgentBase):
         async def _search_photos_tool(
             ctx: Context,
             filters: dict | None = None,
-            root: str = "",
+            full_text_filter: dict | None = None,
+            partitions: list[str] | None = None,
             sort_by: str = "date_taken",
             sort_order: str = "desc",
             page: int = 0,
         ) -> dict:
             """Search photos matching structured predicates.
 
-            Traverses the manifest tree from ``root``, pruning subtrees
-            whose summary statistics exclude any possible match (two-level
-            pruning), then scanning surviving leaf manifests entry by entry.
-            Wally never reads XMP sidecars — all metadata is inline in manifests.
-
-            At least one filter OR a non-empty ``root`` is required. An unscoped,
-            unfiltered search over the entire backend is refused — use
+            Executes a SQL query against the LanceDB columnar index. At least
+            one filter OR a non-empty ``partitions`` list is required. An
+            unscoped, unfiltered search over the entire backend is refused — use
             ``get_partition_summaries`` instead to browse the library overview.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
 
             Args:
-                filters: Dict mapping field names to filter values. At least one
-                    filter must be provided unless ``root`` is non-empty.
+                filters: Dict mapping field names to filter values.
                     The valid fields and their formats are returned by
                     ``list_search_fields``. Examples::
 
                         # Photos taken in 2024 rated 4 or 5 stars
-                        {"date": {"min": "2024", "max": "2024"},
+                        {"dateTaken": {"min": "2024", "max": "2024"},
                          "rating": {"min": 4, "max": 5}}
 
                         # Tagged "vacation" AND "portrait", shot on Nikon
@@ -144,19 +158,29 @@ class WallyAgent(AgentBase):
                         # 4K landscape photos (width ≥ 3840)
                         {"width": {"min": 3840}}
 
+                        # High-ISO shots on a specific lens
+                        {"isoSpeed": {"min": 3200}, "lensModel": "85mm"}
+
                     Omitting a field within a non-empty filters dict is a wildcard
                     — matches all values for that field.
-                root: Subtree to search, relative to the backend root.
-                    When non-empty, an unfiltered scan of that subtree is allowed.
+                full_text_filter: Full-text search over one or more TEXT-typed
+                    fields. Schema::
+
+                        {"query": "Canyon", "columns": ["description"]}
+
+                    ``query`` is a single search string applied across all listed
+                    columns. ``columns`` must be entry_attr names of TEXT-typed
+                    fields (see ``list_search_fields`` → ``full_text_search.fields``).
+                    Results are relevance-ranked and each match includes ``_score``.
+                    Compatible with ``filters`` (SQL predicates applied on top of FTS).
+                partitions: Explicit list of partition paths to search.
+                    When non-empty, an unfiltered scan of those partitions is allowed.
 
             Returns:
-                ``matches`` — list of matching photo records, each containing
-                    ``partition``, ``filename``, ``contentHash``,
-                    and optionally ``dateTaken``, ``rating``, ``tags``,
-                    ``tileIndex``, ``thumbnailsPath``, ``previewsPath``.
-                ``partitionsScanned`` — leaf manifests fully evaluated.
-                ``partitionsPruned`` — subtrees skipped by summary pruning.
-                ``errors`` — count of manifest read failures.
+                ``matches`` — list of matching photo records.
+                ``totalCount`` — total matches across all pages.
+                ``tagFacets`` — ``{tag: count}`` map over the full result set.
+                ``errors`` — count of read failures.
                 ``errorDetails`` — per-failure error messages.
             """
 
@@ -175,7 +199,7 @@ class WallyAgent(AgentBase):
                     if lo is not None or hi is not None:
                         predicate_filters[fdef.name] = RangeFilter(lo=lo, hi=hi)
 
-                elif fdef.type == FieldType.INT_RANGE:
+                elif fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
                     lo = raw.get("min") if isinstance(raw, dict) else None
                     hi = raw.get("max") if isinstance(raw, dict) else None
                     if lo is not None or hi is not None:
@@ -204,6 +228,11 @@ class WallyAgent(AgentBase):
 
             predicate = SearchPredicate(filters=predicate_filters)
 
+            try:
+                fts = _build_fts_filter(full_text_filter)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+
             partitions_done = 0
 
             async def _on_progress(count: int, partition: str) -> None:
@@ -215,7 +244,8 @@ class WallyAgent(AgentBase):
                 result = await search_photos(
                     self.backend,
                     predicate=predicate,
-                    root=root,
+                    partitions=partitions or None,
+                    fts_filter=fts,
                     on_progress=_on_progress,
                     sort_by=sort_by,
                     sort_order=sort_order,
@@ -231,6 +261,7 @@ class WallyAgent(AgentBase):
                 "hasMore": result.has_more,
                 "errors": result.errors,
                 "errorDetails": result.error_details,
+                "tagFacets": result.tag_facets,
                 "matches": [_match_to_dict(m) for m in result.matches],
             }
 
@@ -255,6 +286,29 @@ def _check_filters(filters: dict | None) -> None:
             f"Unknown filter field(s): {', '.join(unknown)}. "
             "Call list_search_fields to discover available fields."
         )
+
+
+def _build_fts_filter(full_text_filter: dict | None) -> FtsFilter | None:
+    """Validate and build an FtsFilter from the raw MCP dict.
+
+    Raises ValueError on invalid input so callers can re-raise as ToolError.
+    """
+    if full_text_filter is None:
+        return None
+    fts_query = full_text_filter.get("query")
+    fts_columns = full_text_filter.get("columns")
+    if not isinstance(fts_query, str) or not fts_query:
+        raise ValueError("full_text_filter.query must be a non-empty string")
+    if not isinstance(fts_columns, list) or not fts_columns:
+        raise ValueError("full_text_filter.columns must be a non-empty list")
+    text_attrs = {fdef.entry_attr for fdef in PHOTO_FIELDS if fdef.type is FieldType.TEXT}
+    bad = [c for c in fts_columns if c not in text_attrs]
+    if bad:
+        raise ValueError(
+            f"full_text_filter.columns contains non-TEXT field(s): {bad}. "
+            "Use list_search_fields → full_text_search.fields for valid column names."
+        )
+    return FtsFilter(query=fts_query, columns=fts_columns)
 
 
 # ---------------------------------------------------------------------------
@@ -337,4 +391,6 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["tileIndex"] = m.tile_index
     if m.avif_hash is not None:
         d["avifHash"] = m.avif_hash
+    if m.score is not None:
+        d["score"] = m.score
     return d

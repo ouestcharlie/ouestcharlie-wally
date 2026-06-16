@@ -202,9 +202,9 @@ async def _generate_preview(
     """Look up the photo entry in the LanceDB index and generate its JPEG preview."""
     lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
     query = f"content_hash = '{_esc(content_hash)}' AND partition = '{_esc(partition)}'"
-    rows_iter, _ = await lance_index.search_where(query, page_size=1)
+    matches, _, _ = await lance_index.search_where(query, page_size=1)
     entry = None
-    async for row in rows_iter:
+    for row in matches:
         if row is None:
             raise FileNotFoundError(
                 f"Photo with content_hash={content_hash!r} not found in partition {partition!r}"

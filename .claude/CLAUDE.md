@@ -5,7 +5,7 @@
 Never use `python`, `python3`, or `uv run pytest` — use the project's own `.venv`:
 
 ```
-/Users/antoinehue/Code/charlie/ouestcharlie-wally/.venv/bin/python -m pytest tests/ -v
+.venv/bin/pytest tests/ -v
 ```
 
 ## MCP Error Handling
