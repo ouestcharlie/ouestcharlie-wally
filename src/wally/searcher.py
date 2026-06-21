@@ -60,9 +60,15 @@ class CollectionFilter:
 
 @dataclass(frozen=True)
 class StringFilter:
-    """Case-insensitive substring match for a string field (e.g. make, model)."""
+    """Case-insensitive partial match for a string field (e.g. make, model, directory).
+
+    ``mode`` controls the match style:
+    - ``"contains"`` (default): value appears anywhere in the field
+    - ``"startswith"``: field starts with value (path prefix match)
+    """
 
     value: str
+    mode: str = "contains"  # "contains" | "startswith"
 
 
 @dataclass(frozen=True)
@@ -154,7 +160,6 @@ class SearchResult:
 async def search_photos(
     backend: Backend,
     predicate: SearchPredicate,
-    partitions: list[str] | None = None,
     fts_filter: FtsFilter | None = None,
     on_progress: Callable[[int, str], Awaitable[None]] | None = None,
     field_config: list[FieldDef] | None = None,
@@ -170,11 +175,12 @@ async def search_photos(
     A missing summary.json is treated as an unindexed library and returns an
     empty result (not an error).
 
+    Directory/partition scoping is expressed via the ``directory`` field in
+    ``predicate`` (e.g. ``StringFilter(value="2024", mode="startswith")``).
+
     Args:
         backend:      Backend to search (read-only).
         predicate:    Filter to apply. An empty predicate matches all photos.
-        partitions:   Explicit list of partition paths to include.
-                      None or empty means all partitions.
         on_progress:  Optional async callback(1, partition)
                       invoked once after the query completes.
         field_config: Field definitions driving match and filter logic.
@@ -219,7 +225,6 @@ async def search_photos(
     try:
         matches, total_count, tag_facets = await lance_index.search_where(
             where_clause,
-            partitions=partitions or None,
             fts_filter=fts_filter,
             order_by=sort_by,
             order_desc=(sort_order == "desc"),
@@ -311,7 +316,11 @@ def _build_where_clause(
 
         elif isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
             col = fdef.entry_attr
-            clauses.append(f"lower({col}) LIKE '%{_esc(fv.value.lower())}%'")
+            escaped = _esc(fv.value.lower())
+            if fv.mode == "startswith":
+                clauses.append(f"lower({col}) LIKE '{escaped}%'")
+            else:
+                clauses.append(f"lower({col}) LIKE '%{escaped}%'")
 
         elif fdef.type is FieldType.TEXT:
             _log.warning(f"Attempt to filter on a full text field '{fdef.entry_attr}', skipped")

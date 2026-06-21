@@ -452,7 +452,10 @@ async def test_avif_hash_propagated_to_match(backend: LocalBackend) -> None:
         grid=ThumbnailGridLayout(rows=1, tile_size=256, photo_order=["aa"]),
     )
     await _leaf(backend, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
-    result = await search_photos(backend, SearchPredicate(), partitions=["2024/07"])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"directory": StringFilter(value="2024/07", mode="startswith")}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].avif_hash == "Kf3QzA2_nBcR8xYvLm1P9w"
 
@@ -708,14 +711,45 @@ async def test_multi_chunk_tile_lookup(backend: LocalBackend) -> None:
 
 
 @pytest.mark.asyncio
-async def test_root_parameter_limits_search_to_subtree(backend: LocalBackend) -> None:
-    """partitions= restricts search to explicit partition list, ignoring others."""
+async def test_directory_filter_startswith_limits_to_prefix(backend: LocalBackend) -> None:
+    """directory filter with startswith restricts search to partitions under that prefix."""
     await _leaf(backend, "2024/07", [_entry("july.jpg", "j1")])
     await _leaf(backend, "2023/12", [_entry("dec.jpg", "d1")])
 
-    result = await search_photos(backend, SearchPredicate(), partitions=["2024/07"])
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"directory": StringFilter(value="2024", mode="startswith")}),
+    )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "july.jpg"
+
+
+@pytest.mark.asyncio
+async def test_directory_filter_contains_matches_substring(backend: LocalBackend) -> None:
+    """directory filter with contains (default) matches partitions containing the substring."""
+    await _leaf(backend, "2024/holiday", [_entry("beach.jpg", "b1")])
+    await _leaf(backend, "2024/work", [_entry("office.jpg", "o1")])
+
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"directory": StringFilter(value="holiday")}),
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].filename == "beach.jpg"
+
+
+@pytest.mark.asyncio
+async def test_string_filter_plain_string_still_works(backend: LocalBackend) -> None:
+    """Plain StringFilter(value=...) still uses contains mode (backward compatibility)."""
+    await _leaf(backend, "p", [_entry("nikon.jpg", "n1", make="Nikon Corporation")])
+    await _leaf(backend, "p2", [_entry("canon.jpg", "c1", make="Canon")])
+
+    result = await search_photos(
+        backend,
+        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+    )
+    assert len(result.matches) == 1
+    assert result.matches[0].filename == "nikon.jpg"
 
 
 # ---------------------------------------------------------------------------

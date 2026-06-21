@@ -72,7 +72,10 @@ class WallyAgent(AgentBase):
                 FieldType.STRING_COLLECTION: (
                     "list of strings (AND semantics — all must be present)"
                 ),
-                FieldType.STRING_MATCH: "string (case-insensitive substring match)",
+                FieldType.STRING_MATCH: (
+                    "string (case-insensitive substring match) or "
+                    '{"value": "...", "mode": "startswith"|"contains"}'
+                ),
                 FieldType.TEXT: "full-text search — use full_text_filter, not filters",
                 FieldType.GPS_BOX: (
                     '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
@@ -128,7 +131,6 @@ class WallyAgent(AgentBase):
             ctx: Context,
             filters: dict | None = None,
             full_text_filter: dict | None = None,
-            partitions: list[str] | None = None,
             sort_by: str = "date_taken",
             sort_order: str = "desc",
             page: int = 0,
@@ -136,9 +138,9 @@ class WallyAgent(AgentBase):
             """Search photos matching structured predicates.
 
             Executes a SQL query against the LanceDB columnar index. At least
-            one filter OR a non-empty ``partitions`` list is required. An
-            unscoped, unfiltered search over the entire backend is refused — use
-            ``get_partition_summaries`` instead to browse the library overview.
+            one filter is required. An unscoped, unfiltered search over the
+            entire backend is refused — use ``get_partition_summaries`` instead
+            to browse the library overview.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
@@ -161,6 +163,9 @@ class WallyAgent(AgentBase):
                         # High-ISO shots on a specific lens
                         {"isoSpeed": {"min": 3200}, "lensModel": "85mm"}
 
+                        # All photos under the 2024/ directory tree
+                        {"directory": {"value": "2024", "mode": "startswith"}}
+
                     Omitting a field within a non-empty filters dict is a wildcard
                     — matches all values for that field.
                 full_text_filter: Full-text search over one or more TEXT-typed
@@ -173,8 +178,6 @@ class WallyAgent(AgentBase):
                     fields (see ``list_search_fields`` → ``full_text_search.fields``).
                     Results are relevance-ranked and each match includes ``_score``.
                     Compatible with ``filters`` (SQL predicates applied on top of FTS).
-                partitions: Explicit list of partition paths to search.
-                    When non-empty, an unfiltered scan of those partitions is allowed.
 
             Returns:
                 ``matches`` — list of matching photo records.
@@ -212,6 +215,13 @@ class WallyAgent(AgentBase):
                 elif fdef.type == FieldType.STRING_MATCH:
                     if isinstance(raw, str) and raw:
                         predicate_filters[fdef.name] = StringFilter(value=raw)
+                    elif (
+                        isinstance(raw, dict) and isinstance(raw.get("value"), str) and raw["value"]
+                    ):
+                        predicate_filters[fdef.name] = StringFilter(
+                            value=raw["value"],
+                            mode=raw.get("mode", "contains"),
+                        )
 
                 elif fdef.type == FieldType.GPS_BOX:
                     if isinstance(raw, dict) and any(
@@ -244,7 +254,6 @@ class WallyAgent(AgentBase):
                 result = await search_photos(
                     self.backend,
                     predicate=predicate,
-                    partitions=partitions or None,
                     fts_filter=fts,
                     on_progress=_on_progress,
                     sort_by=sort_by,

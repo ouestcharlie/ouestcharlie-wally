@@ -146,6 +146,21 @@ def test_string_value_with_quote_is_escaped():
     assert "lower(make) LIKE '%brand''s%'" in result
 
 
+def test_startswith_mode_produces_prefix_like_clause():
+    result = _clause({"directory": StringFilter(value="2024", mode="startswith")})
+    assert "lower(partition) LIKE '2024%'" in result
+
+
+def test_contains_mode_produces_substring_like_clause():
+    result = _clause({"directory": StringFilter(value="holiday", mode="contains")})
+    assert "lower(partition) LIKE '%holiday%'" in result
+
+
+def test_startswith_value_is_lowercased():
+    result = _clause({"directory": StringFilter(value="2024/SUMMER", mode="startswith")})
+    assert "lower(partition) LIKE '2024/summer%'" in result
+
+
 # ---------------------------------------------------------------------------
 # GPS_BOX
 # ---------------------------------------------------------------------------
