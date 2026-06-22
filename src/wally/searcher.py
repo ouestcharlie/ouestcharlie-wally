@@ -65,10 +65,11 @@ class StringFilter:
     ``mode`` controls the match style:
     - ``"contains"`` (default): value appears anywhere in the field
     - ``"startswith"``: field starts with value (path prefix match)
+    - ``"exact"``: case-insensitive exact match
     """
 
     value: str
-    mode: str = "contains"  # "contains" | "startswith"
+    mode: str = "contains"  # "contains" | "startswith" | "exact"
 
 
 @dataclass(frozen=True)
@@ -319,6 +320,8 @@ def _build_where_clause(
             escaped = _esc(fv.value.lower())
             if fv.mode == "startswith":
                 clauses.append(f"lower({col}) LIKE '{escaped}%'")
+            elif fv.mode == "exact":
+                clauses.append(f"lower({col}) = '{escaped}'")
             else:
                 clauses.append(f"lower({col}) LIKE '%{escaped}%'")
 

@@ -161,6 +161,16 @@ def test_startswith_value_is_lowercased():
     assert "lower(partition) LIKE '2024/summer%'" in result
 
 
+def test_exact_mode_produces_equality_clause():
+    result = _clause({"make": StringFilter(value="Nikon", mode="exact")})
+    assert "lower(make) = 'nikon'" in result
+
+
+def test_exact_mode_value_is_lowercased():
+    result = _clause({"make": StringFilter(value="CANON EOS R5", mode="exact")})
+    assert "lower(make) = 'canon eos r5'" in result
+
+
 # ---------------------------------------------------------------------------
 # GPS_BOX
 # ---------------------------------------------------------------------------

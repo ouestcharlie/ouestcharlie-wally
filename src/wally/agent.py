@@ -74,7 +74,7 @@ class WallyAgent(AgentBase):
                 ),
                 FieldType.STRING_MATCH: (
                     "string (case-insensitive substring match) or "
-                    '{"value": "...", "mode": "startswith"|"contains"}'
+                    '{"value": "...", "mode": "startswith"|"contains"|"exact"}'
                 ),
                 FieldType.TEXT: "full-text search — use full_text_filter, not filters",
                 FieldType.GPS_BOX: (
