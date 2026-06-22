@@ -20,6 +20,8 @@ from ouestcharlie_toolkit.schema import (
 
 from wally.searcher import (
     CollectionFilter,
+    FilterGroup,
+    FilterLeaf,
     RangeFilter,
     SearchPredicate,
     StringFilter,
@@ -750,6 +752,70 @@ async def test_string_filter_plain_string_still_works(backend: LocalBackend) -> 
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "nikon.jpg"
+
+
+@pytest.mark.asyncio
+async def test_or_group_returns_union_of_results(backend: LocalBackend) -> None:
+    """OR group returns photos matching either branch."""
+    await _leaf(
+        backend,
+        "p",
+        [
+            _entry("nikon.jpg", "n1", make="Nikon"),
+            _entry("canon.jpg", "c1", make="Canon"),
+            _entry("sony.jpg", "s1", make="Sony"),
+        ],
+    )
+
+    result = await search_photos(
+        backend,
+        SearchPredicate(
+            root=FilterGroup(
+                logic="OR",
+                children=[
+                    FilterLeaf("make", StringFilter(value="nikon")),
+                    FilterLeaf("make", StringFilter(value="canon")),
+                ],
+            )
+        ),
+    )
+    filenames = {m.filename for m in result.matches}
+    assert filenames == {"nikon.jpg", "canon.jpg"}
+
+
+@pytest.mark.asyncio
+async def test_nested_and_or_group(backend: LocalBackend) -> None:
+    """AND of date filter and OR subgroup of make values."""
+    await _leaf(
+        backend,
+        "p",
+        [
+            _entry("nikon_2024.jpg", "n1", make="Nikon", date_taken=datetime(2024, 6, 1)),
+            _entry("canon_2024.jpg", "c1", make="Canon", date_taken=datetime(2024, 6, 1)),
+            _entry("nikon_2023.jpg", "n2", make="Nikon", date_taken=datetime(2023, 6, 1)),
+        ],
+    )
+
+    result = await search_photos(
+        backend,
+        SearchPredicate(
+            root=FilterGroup(
+                logic="AND",
+                children=[
+                    FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None)),
+                    FilterGroup(
+                        logic="OR",
+                        children=[
+                            FilterLeaf("make", StringFilter(value="nikon")),
+                            FilterLeaf("make", StringFilter(value="canon")),
+                        ],
+                    ),
+                ],
+            )
+        ),
+    )
+    filenames = {m.filename for m in result.matches}
+    assert filenames == {"nikon_2024.jpg", "canon_2024.jpg"}
 
 
 # ---------------------------------------------------------------------------

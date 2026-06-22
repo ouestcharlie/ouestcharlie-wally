@@ -8,10 +8,13 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS
 
 from wally.searcher import (
     CollectionFilter,
+    FilterGroup,
+    FilterLeaf,
     GpsBoxFilter,
     RangeFilter,
     SearchPredicate,
     StringFilter,
+    _build_group,
     _build_where_clause,
 )
 
@@ -240,3 +243,92 @@ def test_combined_make_and_rating():
     assert "lower(make) LIKE '%canon%'" in result
     assert "rating >= 3" in result
     assert "rating <= 5" in result
+
+
+# ---------------------------------------------------------------------------
+# FilterGroup — logic operators
+# ---------------------------------------------------------------------------
+
+
+def _group(group: FilterGroup) -> str | None:
+    return _build_group(group, PHOTO_FIELDS)
+
+
+def test_and_group_joins_clauses_with_and():
+    group = FilterGroup(
+        logic="AND",
+        children=[
+            FilterLeaf("make", StringFilter(value="nikon")),
+            FilterLeaf("rating", RangeFilter(lo=4)),
+        ],
+    )
+    result = _group(group)
+    assert "lower(make) LIKE '%nikon%'" in result
+    assert "rating >= 4" in result
+    assert " AND " in result
+    assert " OR " not in result
+
+
+def test_or_group_joins_clauses_with_or():
+    group = FilterGroup(
+        logic="OR",
+        children=[
+            FilterLeaf("make", StringFilter(value="nikon")),
+            FilterLeaf("make", StringFilter(value="canon")),
+        ],
+    )
+    result = _group(group)
+    assert "lower(make) LIKE '%nikon%'" in result
+    assert "lower(make) LIKE '%canon%'" in result
+    assert " OR " in result
+    assert " AND " not in result
+
+
+def test_or_group_wraps_in_parens():
+    group = FilterGroup(
+        logic="OR",
+        children=[
+            FilterLeaf("make", StringFilter(value="nikon")),
+            FilterLeaf("make", StringFilter(value="canon")),
+        ],
+    )
+    result = _group(group)
+    assert result.startswith("(")
+    assert result.endswith(")")
+
+
+def test_nested_group_composes_correctly():
+    # AND of (date) AND (make=nikon OR make=canon)
+    group = FilterGroup(
+        logic="AND",
+        children=[
+            FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1))),
+            FilterGroup(
+                logic="OR",
+                children=[
+                    FilterLeaf("make", StringFilter(value="nikon")),
+                    FilterLeaf("make", StringFilter(value="canon")),
+                ],
+            ),
+        ],
+    )
+    result = _group(group)
+    assert "date_taken >=" in result
+    assert "(lower(make) LIKE '%nikon%' OR lower(make) LIKE '%canon%')" in result
+    assert result.count(" AND ") >= 1
+
+
+def test_single_child_group_no_extra_parens():
+    group = FilterGroup(
+        logic="OR",
+        children=[
+            FilterLeaf("make", StringFilter(value="nikon")),
+        ],
+    )
+    result = _group(group)
+    # Single-child OR group — no parens needed
+    assert result == "lower(make) LIKE '%nikon%'"
+
+
+def test_empty_group_returns_none():
+    assert _group(FilterGroup()) is None

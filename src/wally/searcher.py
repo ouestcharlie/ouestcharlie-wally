@@ -91,27 +91,70 @@ FilterValue = RangeFilter | CollectionFilter | StringFilter | GpsBoxFilter
 
 
 # ---------------------------------------------------------------------------
+# Filter tree (groups and leaves)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FilterLeaf:
+    """A single field predicate: one field name mapped to a filter value."""
+
+    field: str  # FieldDef.name
+    value: FilterValue
+
+
+@dataclass(frozen=True)
+class FilterGroup:
+    """Boolean combination of filter leaves and/or nested groups.
+
+    ``logic`` controls how children are combined:
+    - ``"AND"`` (default): all children must match
+    - ``"OR"``: at least one child must match
+
+    Wire-format shorthand: ``{"all": [...]}`` → AND group, ``{"any": [...]}`` → OR group.
+    A flat field dict (no ``all``/``any`` key) is treated as an implicit AND group.
+    """
+
+    logic: str = "AND"  # "AND" | "OR"
+    children: list[FilterLeaf | FilterGroup] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Public data structures
 # ---------------------------------------------------------------------------
 
 
-@dataclass
 class SearchPredicate:
-    """Generic search predicate.
+    """Generic search predicate expressed as a filter group tree.
 
-    `filters` maps field names (matching FieldDef.name in the active field config)
-    to filter values. An absent key is a wildcard (matches anything).
+    ``root`` is the top-level ``FilterGroup``. Build it directly or use
+    ``FilterGroup`` / ``FilterLeaf`` helpers. The agent layer parses the MCP
+    wire format into this structure.
 
-    Example:
-        SearchPredicate(filters={
-            "date":   RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31)),
-            "rating": RangeFilter(lo=4, hi=None),
-            "tags":   CollectionFilter(values=("travel",)),
-            "make":   StringFilter(value="nikon"),
-        })
+    The legacy ``filters`` keyword accepts a flat ``dict[str, FilterValue]``
+    and is automatically converted to an AND ``FilterGroup`` — this keeps
+    existing test code working without changes.
+
+    Example (AND of date + rating):
+        SearchPredicate(root=FilterGroup(logic="AND", children=[
+            FilterLeaf("dateTaken",
+                RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))),
+            FilterLeaf("rating", RangeFilter(lo=4, hi=None)),
+        ]))
     """
 
-    filters: dict[str, FilterValue] = field(default_factory=dict)
+    def __init__(
+        self,
+        root: FilterGroup | None = None,
+        filters: dict[str, FilterValue] | None = None,
+    ) -> None:
+        if filters is not None:
+            children: list[FilterLeaf | FilterGroup] = [
+                FilterLeaf(field=k, value=v) for k, v in filters.items()
+            ]
+            self.root = FilterGroup(logic="AND", children=children)
+        else:
+            self.root = root if root is not None else FilterGroup()
 
 
 @dataclass
@@ -274,74 +317,102 @@ async def search_photos(
 # ---------------------------------------------------------------------------
 
 
-def _build_where_clause(
-    predicate: SearchPredicate,
-    field_config: list[FieldDef],
-) -> str | None:
-    """Build a SQL WHERE clause from a SearchPredicate.
+def _build_leaf(leaf: FilterLeaf, field_config: list[FieldDef]) -> list[str]:
+    """Return SQL clause fragments for a single FilterLeaf.
 
-    TEXT fields are handled separately via ``fts_filter`` passed to
-    ``search_where`` — they produce no SQL clause here.
-
-    Returns:
-        SQL WHERE expression (without the WHERE keyword), or None.
+    Returns a list because some filter types (DATE_RANGE, GPS_BOX) emit
+    multiple clauses that must always be AND-joined regardless of the parent
+    group's logic.
     """
-    clauses: list[str] = []
+    fdef = next((f for f in field_config if f.name == leaf.field), None)
+    if fdef is None:
+        return []
+    fv = leaf.value
 
-    for fdef in field_config:
-        fv = predicate.filters.get(fdef.name)
-        if fv is None:
-            continue
+    if isinstance(fv, RangeFilter) and fdef.type is FieldType.DATE_RANGE:
+        parts: list[str] = []
+        if fv.lo is not None:
+            ts = fv.lo.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+            parts.append(f"date_taken >= TIMESTAMP '{ts}'")
+        if fv.hi is not None:
+            ts = fv.hi.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+            parts.append(f"date_taken <= TIMESTAMP '{ts}'")
+        return parts
 
-        if isinstance(fv, RangeFilter) and fdef.type is FieldType.DATE_RANGE:
-            if fv.lo is not None:
-                ts = fv.lo.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-                clauses.append(f"date_taken >= TIMESTAMP '{ts}'")
-            if fv.hi is not None:
-                ts = fv.hi.replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-                clauses.append(f"date_taken <= TIMESTAMP '{ts}'")
+    if isinstance(fv, RangeFilter) and fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
+        col = fdef.entry_attr
+        parts = []
+        if fv.lo is not None:
+            parts.append(f"{col} >= {fv.lo}")
+        if fv.hi is not None:
+            parts.append(f"{col} <= {fv.hi}")
+        return parts
 
-        elif isinstance(fv, RangeFilter) and fdef.type in (
-            FieldType.INT_RANGE,
-            FieldType.FLOAT_RANGE,
-        ):
-            col = fdef.entry_attr
-            if fv.lo is not None:
-                clauses.append(f"{col} >= {fv.lo}")
-            if fv.hi is not None:
-                clauses.append(f"{col} <= {fv.hi}")
+    if isinstance(fv, CollectionFilter) and fdef.type is FieldType.STRING_COLLECTION:
+        return [f"array_has(tags, '{_esc(tag)}')" for tag in fv.values]
 
-        elif isinstance(fv, CollectionFilter) and fdef.type is FieldType.STRING_COLLECTION:
-            for tag in fv.values:
-                clauses.append(f"array_has(tags, '{_esc(tag)}')")
+    if isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
+        col = fdef.entry_attr
+        escaped = _esc(fv.value.lower())
+        if fv.mode == "startswith":
+            return [f"lower({col}) LIKE '{escaped}%'"]
+        if fv.mode == "exact":
+            return [f"lower({col}) = '{escaped}'"]
+        return [f"lower({col}) LIKE '%{escaped}%'"]
 
-        elif isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
-            col = fdef.entry_attr
-            escaped = _esc(fv.value.lower())
-            if fv.mode == "startswith":
-                clauses.append(f"lower({col}) LIKE '{escaped}%'")
-            elif fv.mode == "exact":
-                clauses.append(f"lower({col}) = '{escaped}'")
-            else:
-                clauses.append(f"lower({col}) LIKE '%{escaped}%'")
+    if fdef.type is FieldType.TEXT:
+        _log.warning("Attempt to filter on a full text field '%s', skipped", fdef.entry_attr)
+        return []
 
-        elif fdef.type is FieldType.TEXT:
-            _log.warning(f"Attempt to filter on a full text field '{fdef.entry_attr}', skipped")
-            # handled via fts_filter, not SQL
+    if isinstance(fv, GpsBoxFilter) and fdef.type is FieldType.GPS_BOX:
+        parts = ["gps_lat IS NOT NULL AND gps_lon IS NOT NULL"]
+        if fv.min_lat is not None:
+            parts.append(f"gps_lat >= {fv.min_lat}")
+        if fv.max_lat is not None:
+            parts.append(f"gps_lat <= {fv.max_lat}")
+        if fv.min_lon is not None:
+            parts.append(f"gps_lon >= {fv.min_lon}")
+        if fv.max_lon is not None:
+            parts.append(f"gps_lon <= {fv.max_lon}")
+        return parts
 
-        elif isinstance(fv, GpsBoxFilter) and fdef.type is FieldType.GPS_BOX:
-            # Always require non-null GPS when this filter is present.
-            clauses.append("gps_lat IS NOT NULL AND gps_lon IS NOT NULL")
-            if fv.min_lat is not None:
-                clauses.append(f"gps_lat >= {fv.min_lat}")
-            if fv.max_lat is not None:
-                clauses.append(f"gps_lat <= {fv.max_lat}")
-            if fv.min_lon is not None:
-                clauses.append(f"gps_lon >= {fv.min_lon}")
-            if fv.max_lon is not None:
-                clauses.append(f"gps_lon <= {fv.max_lon}")
+    return []
 
-    return " AND ".join(clauses) if clauses else None
+
+def _build_group(group: FilterGroup, field_config: list[FieldDef]) -> str | None:
+    """Recursively build a SQL expression from a FilterGroup.
+
+    Returns a parenthesised expression for OR groups (when they contain more
+    than one clause) so they compose correctly inside a parent AND group.
+    Returns None when the group produces no clauses.
+    """
+    child_exprs: list[str] = []
+
+    for child in group.children:
+        if isinstance(child, FilterLeaf):
+            frags = _build_leaf(child, field_config)
+            if frags:
+                # Multi-fragment leaves (date range, GPS) are always AND-joined internally.
+                child_exprs.append(" AND ".join(frags) if len(frags) > 1 else frags[0])
+        elif isinstance(child, FilterGroup):
+            expr = _build_group(child, field_config)
+            if expr:
+                child_exprs.append(expr)
+
+    if not child_exprs:
+        return None
+
+    joiner = " OR " if group.logic == "OR" else " AND "
+    combined = joiner.join(child_exprs)
+    # Wrap OR groups in parens so they compose safely inside parent AND expressions.
+    if group.logic == "OR" and len(child_exprs) > 1:
+        return f"({combined})"
+    return combined
+
+
+def _build_where_clause(predicate: SearchPredicate, field_config: list[FieldDef]) -> str | None:
+    """Build a SQL WHERE clause from a SearchPredicate."""
+    return _build_group(predicate.root, field_config)
 
 
 def _row_to_searchable(row: dict[str, Any], field_config: list[FieldDef]) -> dict[str, Any]:
