@@ -131,10 +131,6 @@ class SearchPredicate:
     ``FilterGroup`` / ``FilterLeaf`` helpers. The agent layer parses the MCP
     wire format into this structure.
 
-    The legacy ``filters`` keyword accepts a flat ``dict[str, FilterValue]``
-    and is automatically converted to an AND ``FilterGroup`` — this keeps
-    existing test code working without changes.
-
     Example (AND of date + rating):
         SearchPredicate(root=FilterGroup(logic="AND", children=[
             FilterLeaf("dateTaken",
@@ -143,18 +139,8 @@ class SearchPredicate:
         ]))
     """
 
-    def __init__(
-        self,
-        root: FilterGroup | None = None,
-        filters: dict[str, FilterValue] | None = None,
-    ) -> None:
-        if filters is not None:
-            children: list[FilterLeaf | FilterGroup] = [
-                FilterLeaf(field=k, value=v) for k, v in filters.items()
-            ]
-            self.root = FilterGroup(logic="AND", children=children)
-        else:
-            self.root = root if root is not None else FilterGroup()
+    def __init__(self, root: FilterGroup | None = None) -> None:
+        self.root = root if root is not None else FilterGroup()
 
 
 @dataclass

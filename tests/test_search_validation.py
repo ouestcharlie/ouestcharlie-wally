@@ -19,10 +19,10 @@ def test_none_equivalent_accepted() -> None:
     assert group.children == []
 
 
-def test_known_fields_accepted() -> None:
-    group = _parse({"dateTaken": {"min": "2024"}, "rating": {"min": 4}})
-    assert isinstance(group, FilterGroup)
-    assert len(group.children) == 2
+def test_single_known_field_accepted() -> None:
+    leaf = _parse({"dateTaken": {"min": "2024"}})
+    assert isinstance(leaf, FilterLeaf)
+    assert leaf.field == "dateTaken"
 
 
 def test_single_unknown_field_raises() -> None:
@@ -30,20 +30,19 @@ def test_single_unknown_field_raises() -> None:
         _parse({"mood": "happy"})
 
 
-def test_multiple_unknown_fields_raise_on_first() -> None:
-    with pytest.raises(ValueError, match="Unknown filter field"):
-        _parse({"mood": "happy", "weather": "sunny"})
+def test_multi_key_flat_dict_raises() -> None:
+    with pytest.raises(ValueError, match="all"):
+        _parse({"make": "nikon", "rating": {"min": 4}})
+
+
+def test_multi_key_flat_dict_error_mentions_all() -> None:
+    with pytest.raises(ValueError, match='"all"'):
+        _parse({"dateTaken": {"min": "2024"}, "rating": {"min": 4}})
 
 
 def test_error_message_mentions_list_tool() -> None:
     with pytest.raises(ValueError, match="list_search_fields"):
         _parse({"nonexistent": "value"})
-
-
-def test_flat_dict_produces_and_group() -> None:
-    group = _parse({"make": "nikon", "rating": {"min": 4}})
-    assert group.logic == "AND"
-    assert all(isinstance(c, FilterLeaf) for c in group.children)
 
 
 def test_all_key_produces_and_group() -> None:

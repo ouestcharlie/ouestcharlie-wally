@@ -33,8 +33,8 @@ class WallyAgent(AgentBase):
     launching). Exposes MCP tools:
     - ``list_search_fields``: returns all queryable fields with types and formats.
     - ``get_partition_summaries``: returns the root summary for the backend.
-    - ``search_photos``: searches photos using a generic ``filters`` dict driven
-      by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
+    - ``search_photos``: searches photos using a structured filter expression
+      (flat AND dict, ``all``/``any`` groups, or nested combinations).
 
     Wally is read-only — it never writes XMP sidecars or manifests.
     """
@@ -91,7 +91,6 @@ class WallyAgent(AgentBase):
                     "name": fdef.name,
                     "type": fdef.type.name,
                     "filterFormat": _FORMAT[fdef.type],
-                    "pruneable": fdef.summary_range,
                 }
                 for fdef in PHOTO_FIELDS
                 if fdef.type is not FieldType.TEXT
@@ -150,19 +149,12 @@ class WallyAgent(AgentBase):
             Args:
                 filters: Filter expression. Three forms are accepted:
 
-                    **Flat dict** (implicit AND — all conditions must match)::
-
-                        # Photos taken in 2024 rated 4 or 5 stars
-                        {"dateTaken": {"min": "2024", "max": "2024"},
-                         "rating": {"min": 4, "max": 5}}
-
-                        # Tagged "vacation" AND "portrait", shot on Nikon
-                        {"tags": ["vacation", "portrait"], "make": "nikon"}
+                    **Single field** — one ``{"fieldName": value}`` dict::
 
                         # All photos under the 2024/ directory tree
                         {"directory": {"value": "2024", "mode": "startswith"}}
 
-                    **``{"all": [...]}``** — explicit AND group::
+                    **``{"all": [...]}``** — AND group (all must match)::
 
                         # 4K Nikon shots in 2024
                         {"all": [
@@ -254,23 +246,25 @@ class WallyAgent(AgentBase):
 # ---------------------------------------------------------------------------
 
 
-def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup:
-    """Parse a raw MCP filter dict into a FilterGroup tree (recursive).
+def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:
+    """Parse a raw MCP filter dict into a FilterGroup or FilterLeaf (recursive).
 
     Three forms are accepted:
-    - ``{"all": [...]}`` → AND group; each list item is parsed recursively.
-    - ``{"any": [...]}`` → OR group; each list item is parsed recursively.
-    - flat dict (no ``all``/``any`` key) → implicit AND group of field leaves.
+    - ``{"all": [{"field1Name": value1}, {"field2Name": value2}...]}`` → AND group.
+    - ``{"any": [{"field1Name": value1}, {"field1Name": value2}]...]}`` → OR group;.
+    - single-key dict ``{"fieldName": value}`` → FilterLeaf.
 
-    Raises ValueError on unknown field names or malformed input.
+    Groups are parsed recursively. i.e. "all" or "any" groups can contain other groups
+
     """
     known = {fdef.name: fdef for fdef in field_config}
 
     if "all" in raw or "any" in raw:
         logic = "AND" if "all" in raw else "OR"
-        items = raw.get("all" if logic == "AND" else "any", [])
+        key = "all" if logic == "AND" else "any"
+        items = raw.get(key, [])
         if not isinstance(items, list):
-            raise ValueError(f"'{'all' if logic == 'AND' else 'any'}' must be a list")
+            raise ValueError(f"'{key}' must be a list")
         children: list[FilterLeaf | FilterGroup] = []
         for item in items:
             if not isinstance(item, dict):
@@ -278,22 +272,26 @@ def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup:
             children.append(_parse_filter_node(item, field_config))
         return FilterGroup(logic=logic, children=children)
 
-    # Flat dict — parse each key as a field leaf.
-    leaves: list[FilterLeaf | FilterGroup] = []
-    for key, value in raw.items():
-        if key not in known:
-            raise ValueError(
-                f"Unknown filter field: '{key}'. "
-                "Call list_search_fields to discover available fields."
-            )
-        fdef = known[key]
-        fv = _parse_filter_value(fdef, value)
-        if fv is not None:
-            leaves.append(FilterLeaf(field=key, value=fv))
-    # Single-key flat dict used as a group child → unwrap to a bare FilterLeaf.
-    if len(leaves) == 1 and isinstance(leaves[0], FilterLeaf):
-        return leaves[0]
-    return FilterGroup(logic="AND", children=leaves)
+    if len(raw) == 0:
+        return FilterGroup()
+
+    if len(raw) != 1:
+        raise ValueError(
+            f"A filter node must be a single-field leaf (one key), "
+            f'or a group using "all" or "any". Got {len(raw)} keys: {list(raw)!r}. '
+            'To combine multiple conditions use {"all": [{"field1": ...}, {"field2": ...}]}.'
+        )
+
+    key, value = next(iter(raw.items()))
+    if key not in known:
+        raise ValueError(
+            f"Unknown filter field: '{key}'. Call list_search_fields to discover available fields."
+        )
+    fdef = known[key]
+    fv = _parse_filter_value(fdef, value)
+    if fv is None:
+        return FilterGroup()
+    return FilterLeaf(field=key, value=fv)
 
 
 def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]

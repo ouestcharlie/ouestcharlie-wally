@@ -20,7 +20,8 @@ from wally.searcher import (
 
 
 def _clause(filters: dict) -> str | None:
-    return _build_where_clause(SearchPredicate(filters=filters), PHOTO_FIELDS)
+    children = [FilterLeaf(field=k, value=v) for k, v in filters.items()]
+    return _build_where_clause(SearchPredicate(root=FilterGroup(children=children)), PHOTO_FIELDS)
 
 
 # ---------------------------------------------------------------------------

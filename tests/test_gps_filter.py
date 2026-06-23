@@ -10,7 +10,7 @@ from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import ManifestSummary, PhotoEntry
 
-from wally.searcher import GpsBoxFilter, SearchPredicate, search_photos
+from wally.searcher import FilterGroup, FilterLeaf, GpsBoxFilter, SearchPredicate, search_photos
 
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
@@ -57,7 +57,13 @@ async def test_photo_inside_bbox_matches(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -71,7 +77,13 @@ async def test_photo_outside_lat_excluded(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -84,7 +96,13 @@ async def test_photo_outside_lon_excluded(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -97,7 +115,13 @@ async def test_photo_without_gps_excluded(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -117,7 +141,7 @@ async def test_open_ended_bbox_matches_any_gps(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"gps": GpsBoxFilter()}),
+        SearchPredicate(root=FilterGroup(children=[FilterLeaf("gps", GpsBoxFilter())])),
     )
     assert len(result.matches) == 2
 
@@ -135,7 +159,13 @@ async def test_disjoint_partition_returns_no_results(backend: LocalBackend) -> N
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -149,7 +179,13 @@ async def test_overlapping_partition_returns_match(backend: LocalBackend) -> Non
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.5, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.5, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -166,7 +202,13 @@ async def test_no_gps_summary_still_searched(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -184,7 +226,13 @@ async def test_photo_exactly_on_min_lat_boundary_matches(backend: LocalBackend) 
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -197,7 +245,13 @@ async def test_photo_exactly_on_max_lon_boundary_matches(backend: LocalBackend) 
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -210,7 +264,13 @@ async def test_photo_just_outside_max_lat_excluded(backend: LocalBackend) -> Non
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -234,7 +294,7 @@ async def test_only_min_lat_set(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"gps": GpsBoxFilter(min_lat=45.0)}),
+        SearchPredicate(root=FilterGroup(children=[FilterLeaf("gps", GpsBoxFilter(min_lat=45.0))])),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "north.jpg"
@@ -253,7 +313,7 @@ async def test_only_max_lon_set(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"gps": GpsBoxFilter(max_lon=0.0)}),
+        SearchPredicate(root=FilterGroup(children=[FilterLeaf("gps", GpsBoxFilter(max_lon=0.0))])),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "west.jpg"
@@ -280,7 +340,13 @@ async def test_mixed_gps_no_gps_in_same_leaf(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -300,7 +366,13 @@ async def test_partition_bbox_touches_filter_box_photo_matches(backend: LocalBac
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"gps": GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "gps", GpsBoxFilter(min_lat=48.0, max_lat=49.0, min_lon=2.0, max_lon=3.0)
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1

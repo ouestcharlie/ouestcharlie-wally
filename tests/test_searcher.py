@@ -124,7 +124,13 @@ async def test_date_range_matches(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -138,7 +144,13 @@ async def test_date_range_excludes(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=datetime(2024, 12, 31))
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 0
@@ -163,7 +175,11 @@ async def test_photo_without_date_excluded_by_date_predicate(backend: LocalBacke
     await _leaf(backend, "", [_entry(date_taken=None)])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     assert len(result.matches) == 0
 
@@ -187,7 +203,9 @@ async def test_tag_filter_matches(backend: LocalBackend) -> None:
     await _leaf(backend, "", [_entry(tags=["travel", "france"])])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"tags": CollectionFilter(values=("travel",))}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("tags", CollectionFilter(values=("travel",)))])
+        ),
     )
     assert len(result.matches) == 1
 
@@ -205,7 +223,11 @@ async def test_tag_filter_and_semantics(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"tags": CollectionFilter(values=("travel", "france"))}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("tags", CollectionFilter(values=("travel", "france")))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "a.jpg"
@@ -217,7 +239,9 @@ async def test_tag_filter_no_match(backend: LocalBackend) -> None:
     await _leaf(backend, "", [_entry(tags=["france"])])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"tags": CollectionFilter(values=("travel",))}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("tags", CollectionFilter(values=("travel",)))])
+        ),
     )
     assert len(result.matches) == 0
 
@@ -240,7 +264,9 @@ async def test_rating_min_filter(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"rating": RangeFilter(lo=4, hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("rating", RangeFilter(lo=4, hi=None))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "high.jpg"
@@ -259,7 +285,9 @@ async def test_rating_max_filter(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"rating": RangeFilter(lo=None, hi=2)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("rating", RangeFilter(lo=None, hi=2))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "low.jpg"
@@ -271,7 +299,9 @@ async def test_rating_none_excluded_by_rating_predicate(backend: LocalBackend) -
     await _leaf(backend, "", [_entry(rating=None)])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"rating": RangeFilter(lo=1, hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("rating", RangeFilter(lo=1, hi=None))])
+        ),
     )
     assert len(result.matches) == 0
 
@@ -294,7 +324,9 @@ async def test_make_substring_case_insensitive(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("make", StringFilter(value="nikon"))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "nikon.jpg"
@@ -313,7 +345,9 @@ async def test_model_substring_case_insensitive(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"model": StringFilter(value="d850")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("model", StringFilter(value="d850"))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "d850.jpg"
@@ -325,7 +359,9 @@ async def test_make_none_excluded_by_make_predicate(backend: LocalBackend) -> No
     await _leaf(backend, "", [_entry(make=None)])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("make", StringFilter(value="nikon"))])
+        ),
     )
     assert len(result.matches) == 0
 
@@ -355,7 +391,11 @@ async def test_date_filter_returns_correct_matches_across_partitions(
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
@@ -379,7 +419,9 @@ async def test_rating_filter_returns_correct_partition(backend: LocalBackend) ->
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"rating": RangeFilter(lo=4, hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("rating", RangeFilter(lo=4, hi=None))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "high.jpg"
@@ -394,7 +436,11 @@ async def test_unfiltered_partition_still_searched(backend: LocalBackend) -> Non
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     assert len(result.matches) == 0
 
@@ -425,7 +471,13 @@ async def test_tile_index_computed_correctly(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 2), hi=datetime(2024, 1, 2))}
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "dateTaken", RangeFilter(lo=datetime(2024, 1, 2), hi=datetime(2024, 1, 2))
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -456,7 +508,11 @@ async def test_avif_hash_propagated_to_match(backend: LocalBackend) -> None:
     await _leaf(backend, "2024/07", [_entry("photo.jpg", "aa")], chunks=[chunk])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"directory": StringFilter(value="2024/07", mode="startswith")}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("directory", StringFilter(value="2024/07", mode="startswith"))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].avif_hash == "Kf3QzA2_nBcR8xYvLm1P9w"
@@ -532,7 +588,11 @@ async def test_multi_partition_search(backend: LocalBackend) -> None:
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     filenames = {m.filename for m in result.matches}
     assert filenames == {"jan.jpg", "jul1.jpg", "jul2.jpg"}
@@ -558,10 +618,12 @@ async def test_combined_date_and_rating_filter(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={
-                "dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None),
-                "rating": RangeFilter(lo=4, hi=None),
-            }
+            root=FilterGroup(
+                children=[
+                    FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None)),
+                    FilterLeaf("rating", RangeFilter(lo=4, hi=None)),
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -583,10 +645,12 @@ async def test_combined_tag_and_make_filter(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={
-                "tags": CollectionFilter(values=("travel",)),
-                "make": StringFilter(value="nikon"),
-            }
+            root=FilterGroup(
+                children=[
+                    FilterLeaf("tags", CollectionFilter(values=("travel",))),
+                    FilterLeaf("make", StringFilter(value="nikon")),
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -611,7 +675,9 @@ async def test_width_min_filter(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"width": RangeFilter(lo=3840, hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("width", RangeFilter(lo=3840, hi=None))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "wide.jpg"
@@ -630,7 +696,9 @@ async def test_height_max_filter(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"height": RangeFilter(lo=None, hi=1080)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("height", RangeFilter(lo=None, hi=1080))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "short.jpg"
@@ -642,7 +710,9 @@ async def test_width_none_excluded_by_width_predicate(backend: LocalBackend) -> 
     await _leaf(backend, "", [_entry(width=None)])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"width": RangeFilter(lo=1, hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("width", RangeFilter(lo=1, hi=None))])
+        ),
     )
     assert len(result.matches) == 0
 
@@ -664,12 +734,13 @@ async def test_date_filter_strips_timezone(backend: LocalBackend) -> None:
     result = await search_photos(
         backend,
         SearchPredicate(
-            filters={
-                "dateTaken": RangeFilter(
-                    lo=datetime(2024, 7, 1),
-                    hi=datetime(2024, 7, 31),
-                )
-            }
+            root=FilterGroup(
+                children=[
+                    FilterLeaf(
+                        "dateTaken", RangeFilter(lo=datetime(2024, 7, 1), hi=datetime(2024, 7, 31))
+                    )
+                ]
+            )
         ),
     )
     assert len(result.matches) == 1
@@ -720,7 +791,11 @@ async def test_directory_filter_startswith_limits_to_prefix(backend: LocalBacken
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"directory": StringFilter(value="2024", mode="startswith")}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("directory", StringFilter(value="2024", mode="startswith"))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "july.jpg"
@@ -734,7 +809,9 @@ async def test_directory_filter_contains_matches_substring(backend: LocalBackend
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"directory": StringFilter(value="holiday")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("directory", StringFilter(value="holiday"))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "beach.jpg"
@@ -748,7 +825,9 @@ async def test_string_filter_plain_string_still_works(backend: LocalBackend) -> 
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"make": StringFilter(value="nikon")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("make", StringFilter(value="nikon"))])
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "nikon.jpg"
@@ -830,7 +909,11 @@ async def test_deep_nesting_traversal(backend: LocalBackend) -> None:
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "deep.jpg"
@@ -856,7 +939,11 @@ async def test_deep_nesting_two_partitions_one_matches(backend: LocalBackend) ->
 
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"dateTaken": RangeFilter(lo=datetime(2024, 1, 1), hi=None)}),
+        SearchPredicate(
+            root=FilterGroup(
+                children=[FilterLeaf("dateTaken", RangeFilter(lo=datetime(2024, 1, 1), hi=None))]
+            )
+        ),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "new.jpg"
@@ -903,7 +990,7 @@ async def test_rating_exact_match(backend: LocalBackend) -> None:
     )
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"rating": RangeFilter(lo=4, hi=4)}),
+        SearchPredicate(root=FilterGroup(children=[FilterLeaf("rating", RangeFilter(lo=4, hi=4))])),
     )
     assert len(result.matches) == 1
     assert result.matches[0].filename == "four.jpg"
@@ -920,6 +1007,8 @@ async def test_tag_filter_empty_photo_tags_excluded(backend: LocalBackend) -> No
     await _leaf(backend, "", [_entry(tags=[])])
     result = await search_photos(
         backend,
-        SearchPredicate(filters={"tags": CollectionFilter(values=("travel",))}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("tags", CollectionFilter(values=("travel",)))])
+        ),
     )
     assert len(result.matches) == 0

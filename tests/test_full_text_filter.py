@@ -7,7 +7,13 @@ from ouestcharlie_toolkit.fields import PHOTO_FIELDS
 from ouestcharlie_toolkit.lance_index import FtsFilter
 
 from wally.agent import _build_fts_filter
-from wally.searcher import SearchPredicate, StringFilter, _build_where_clause
+from wally.searcher import (
+    FilterGroup,
+    FilterLeaf,
+    SearchPredicate,
+    StringFilter,
+    _build_where_clause,
+)
 
 # ---------------------------------------------------------------------------
 # _build_fts_filter — validation
@@ -83,7 +89,9 @@ def test_error_mentions_list_search_fields():
 def test_text_field_in_predicate_produces_no_clause():
     """FieldType.TEXT fields in predicate filters are silently skipped."""
     result = _build_where_clause(
-        SearchPredicate(filters={"description": StringFilter(value="Canyon")}),
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("description", StringFilter(value="Canyon"))])
+        ),
         PHOTO_FIELDS,
     )
     assert result is None
@@ -93,10 +101,12 @@ def test_text_field_does_not_bleed_into_combined_clause():
     """TEXT filter doesn't pollute a combined predicate that has real SQL filters."""
     result = _build_where_clause(
         SearchPredicate(
-            filters={
-                "description": StringFilter(value="Canyon"),
-                "make": StringFilter(value="nikon"),
-            }
+            root=FilterGroup(
+                children=[
+                    FilterLeaf("description", StringFilter(value="Canyon")),
+                    FilterLeaf("make", StringFilter(value="nikon")),
+                ]
+            )
         ),
         PHOTO_FIELDS,
     )
