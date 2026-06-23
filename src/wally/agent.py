@@ -15,6 +15,8 @@ from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
     CollectionFilter,
+    FilterGroup,
+    FilterLeaf,
     GpsBoxFilter,
     PhotoMatch,
     RangeFilter,
@@ -31,8 +33,8 @@ class WallyAgent(AgentBase):
     launching). Exposes MCP tools:
     - ``list_search_fields``: returns all queryable fields with types and formats.
     - ``get_partition_summaries``: returns the root summary for the backend.
-    - ``search_photos``: searches photos using a generic ``filters`` dict driven
-      by the field definitions in ``ouestcharlie_toolkit.fields.PHOTO_FIELDS``.
+    - ``search_photos``: searches photos using a structured filter expression
+      (flat AND dict, ``all``/``any`` groups, or nested combinations).
 
     Wally is read-only — it never writes XMP sidecars or manifests.
     """
@@ -72,7 +74,10 @@ class WallyAgent(AgentBase):
                 FieldType.STRING_COLLECTION: (
                     "list of strings (AND semantics — all must be present)"
                 ),
-                FieldType.STRING_MATCH: "string (case-insensitive substring match)",
+                FieldType.STRING_MATCH: (
+                    "string (case-insensitive substring match) or "
+                    '{"value": "...", "mode": "startswith"|"contains"|"exact"}'
+                ),
                 FieldType.TEXT: "full-text search — use full_text_filter, not filters",
                 FieldType.GPS_BOX: (
                     '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
@@ -86,7 +91,6 @@ class WallyAgent(AgentBase):
                     "name": fdef.name,
                     "type": fdef.type.name,
                     "filterFormat": _FORMAT[fdef.type],
-                    "pruneable": fdef.summary_range,
                 }
                 for fdef in PHOTO_FIELDS
                 if fdef.type is not FieldType.TEXT
@@ -128,7 +132,6 @@ class WallyAgent(AgentBase):
             ctx: Context,
             filters: dict | None = None,
             full_text_filter: dict | None = None,
-            partitions: list[str] | None = None,
             sort_by: str = "date_taken",
             sort_order: str = "desc",
             page: int = 0,
@@ -136,33 +139,42 @@ class WallyAgent(AgentBase):
             """Search photos matching structured predicates.
 
             Executes a SQL query against the LanceDB columnar index. At least
-            one filter OR a non-empty ``partitions`` list is required. An
-            unscoped, unfiltered search over the entire backend is refused — use
-            ``get_partition_summaries`` instead to browse the library overview.
+            one filter is required. An unscoped, unfiltered search over the
+            entire backend is refused — use ``get_partition_summaries`` instead
+            to browse the library overview.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
 
             Args:
-                filters: Dict mapping field names to filter values.
-                    The valid fields and their formats are returned by
-                    ``list_search_fields``. Examples::
+                filters: Filter expression. Three forms are accepted:
 
-                        # Photos taken in 2024 rated 4 or 5 stars
-                        {"dateTaken": {"min": "2024", "max": "2024"},
-                         "rating": {"min": 4, "max": 5}}
+                    **Single field** — one ``{"fieldName": value}`` dict::
 
-                        # Tagged "vacation" AND "portrait", shot on Nikon
-                        {"tags": ["vacation", "portrait"], "make": "nikon"}
+                        # All photos under the 2024/ directory tree
+                        {"directory": {"value": "2024", "mode": "startswith"}}
 
-                        # 4K landscape photos (width ≥ 3840)
-                        {"width": {"min": 3840}}
+                    **``{"all": [...]}``** — AND group (all must match)::
 
-                        # High-ISO shots on a specific lens
-                        {"isoSpeed": {"min": 3200}, "lensModel": "85mm"}
+                        # 4K Nikon shots in 2024
+                        {"all": [
+                            {"dateTaken": {"min": "2024", "max": "2024"}},
+                            {"make": "nikon"},
+                            {"width": {"min": 3840}}
+                        ]}
 
-                    Omitting a field within a non-empty filters dict is a wildcard
-                    — matches all values for that field.
+                    **``{"any": [...]}``** — OR group (at least one must match)::
+
+                        # Photos shot on Nikon OR Canon
+                        {"any": [{"make": "nikon"}, {"make": "canon"}]}
+
+                    Groups can be nested::
+
+                        # 2024 photos on Nikon OR Canon
+                        {"all": [
+                            {"dateTaken": {"min": "2024", "max": "2024"}},
+                            {"any": [{"make": "nikon"}, {"make": "canon"}]}
+                        ]}
                 full_text_filter: Full-text search over one or more TEXT-typed
                     fields. Schema::
 
@@ -173,8 +185,6 @@ class WallyAgent(AgentBase):
                     fields (see ``list_search_fields`` → ``full_text_search.fields``).
                     Results are relevance-ranked and each match includes ``_score``.
                     Compatible with ``filters`` (SQL predicates applied on top of FTS).
-                partitions: Explicit list of partition paths to search.
-                    When non-empty, an unfiltered scan of those partitions is allowed.
 
             Returns:
                 ``matches`` — list of matching photo records.
@@ -184,49 +194,15 @@ class WallyAgent(AgentBase):
                 ``errorDetails`` — per-failure error messages.
             """
 
-            _check_filters(filters)
+            try:
+                node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
 
-            predicate_filters: dict = {}
-
-            for fdef in PHOTO_FIELDS:
-                raw = (filters or {}).get(fdef.name)
-                if raw is None:
-                    continue
-
-                if fdef.type == FieldType.DATE_RANGE:
-                    lo = _parse_date_min(raw.get("min")) if isinstance(raw, dict) else None
-                    hi = _parse_date_max(raw.get("max")) if isinstance(raw, dict) else None
-                    if lo is not None or hi is not None:
-                        predicate_filters[fdef.name] = RangeFilter(lo=lo, hi=hi)
-
-                elif fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
-                    lo = raw.get("min") if isinstance(raw, dict) else None
-                    hi = raw.get("max") if isinstance(raw, dict) else None
-                    if lo is not None or hi is not None:
-                        predicate_filters[fdef.name] = RangeFilter(lo=lo, hi=hi)
-
-                elif fdef.type == FieldType.STRING_COLLECTION:
-                    if isinstance(raw, list) and raw:
-                        predicate_filters[fdef.name] = CollectionFilter(values=tuple(raw))
-
-                elif fdef.type == FieldType.STRING_MATCH:
-                    if isinstance(raw, str) and raw:
-                        predicate_filters[fdef.name] = StringFilter(value=raw)
-
-                elif fdef.type == FieldType.GPS_BOX:
-                    if isinstance(raw, dict) and any(
-                        raw.get(k) is not None for k in ("minLat", "maxLat", "minLon", "maxLon")
-                    ):
-                        predicate_filters[fdef.name] = GpsBoxFilter(
-                            min_lat=raw.get("minLat"),
-                            max_lat=raw.get("maxLat"),
-                            min_lon=raw.get("minLon"),
-                            max_lon=raw.get("maxLon"),
-                        )
-
-                # DESCRIPTIVE: not yet implemented — silently ignored
-
-            predicate = SearchPredicate(filters=predicate_filters)
+            root_group = (
+                node if isinstance(node, FilterGroup) else FilterGroup(logic="AND", children=[node])
+            )
+            predicate = SearchPredicate(root=root_group)
 
             try:
                 fts = _build_fts_filter(full_text_filter)
@@ -244,7 +220,6 @@ class WallyAgent(AgentBase):
                 result = await search_photos(
                     self.backend,
                     predicate=predicate,
-                    partitions=partitions or None,
                     fts_filter=fts,
                     on_progress=_on_progress,
                     sort_by=sort_by,
@@ -271,21 +246,90 @@ class WallyAgent(AgentBase):
 # ---------------------------------------------------------------------------
 
 
-def _check_filters(filters: dict | None) -> None:
-    """Raise ValueError if *filters* contains any key not in PHOTO_FIELDS.
+def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:
+    """Parse a raw MCP filter dict into a FilterGroup or FilterLeaf (recursive).
 
-    Prevents clients from sending invented field names that would be silently
-    ignored.
+    Three forms are accepted:
+    - ``{"all": [{"field1Name": value1}, {"field2Name": value2}...]}`` → AND group.
+    - ``{"any": [{"field1Name": value1}, {"field1Name": value2}]...]}`` → OR group;.
+    - single-key dict ``{"fieldName": value}`` → FilterLeaf.
+
+    Groups are parsed recursively. i.e. "all" or "any" groups can contain other groups
+
     """
-    if not filters:
-        return
-    known = {fdef.name for fdef in PHOTO_FIELDS}
-    unknown = sorted(k for k in filters if k not in known)
-    if unknown:
+    known = {fdef.name: fdef for fdef in field_config}
+
+    if "all" in raw or "any" in raw:
+        logic = "AND" if "all" in raw else "OR"
+        key = "all" if logic == "AND" else "any"
+        items = raw.get(key, [])
+        if not isinstance(items, list):
+            raise ValueError(f"'{key}' must be a list")
+        children: list[FilterLeaf | FilterGroup] = []
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Each filter group child must be a dict")
+            children.append(_parse_filter_node(item, field_config))
+        return FilterGroup(logic=logic, children=children)
+
+    if len(raw) == 0:
+        return FilterGroup()
+
+    if len(raw) != 1:
         raise ValueError(
-            f"Unknown filter field(s): {', '.join(unknown)}. "
-            "Call list_search_fields to discover available fields."
+            f"A filter node must be a single-field leaf (one key), "
+            f'or a group using "all" or "any". Got {len(raw)} keys: {list(raw)!r}. '
+            'To combine multiple conditions use {"all": [{"field1": ...}, {"field2": ...}]}.'
         )
+
+    key, value = next(iter(raw.items()))
+    if key not in known:
+        raise ValueError(
+            f"Unknown filter field: '{key}'. Call list_search_fields to discover available fields."
+        )
+    fdef = known[key]
+    fv = _parse_filter_value(fdef, value)
+    if fv is None:
+        return FilterGroup()
+    return FilterLeaf(field=key, value=fv)
+
+
+def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
+    """Parse a single raw filter value according to the field's FieldType."""
+    if fdef.type == FieldType.DATE_RANGE:
+        lo = _parse_date_min(raw.get("min")) if isinstance(raw, dict) else None
+        hi = _parse_date_max(raw.get("max")) if isinstance(raw, dict) else None
+        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
+
+    if fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
+        lo = raw.get("min") if isinstance(raw, dict) else None
+        hi = raw.get("max") if isinstance(raw, dict) else None
+        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
+
+    if fdef.type == FieldType.STRING_COLLECTION:
+        return CollectionFilter(values=tuple(raw)) if isinstance(raw, list) and raw else None
+
+    if fdef.type == FieldType.STRING_MATCH:
+        if isinstance(raw, str) and raw:
+            return StringFilter(value=raw)
+        if isinstance(raw, dict) and isinstance(raw.get("value"), str) and raw["value"]:
+            return StringFilter(value=raw["value"], mode=raw.get("mode", "contains"))
+        return None
+
+    if fdef.type == FieldType.GPS_BOX:
+        if isinstance(raw, dict) and any(
+            raw.get(k) is not None for k in ("minLat", "maxLat", "minLon", "maxLon")
+        ):
+            return GpsBoxFilter(
+                min_lat=raw.get("minLat"),
+                max_lat=raw.get("maxLat"),
+                min_lon=raw.get("minLon"),
+                max_lon=raw.get("maxLon"),
+            )
+        return None
+
+    # DESCRIPTIVE and TEXT: not yet implemented — silently ignored
+    return None
 
 
 def _build_fts_filter(full_text_filter: dict | None) -> FtsFilter | None:

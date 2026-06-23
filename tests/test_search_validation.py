@@ -1,38 +1,81 @@
-"""Tests for search filter validation — unknown field rejection."""
+"""Tests for search filter validation — unknown field rejection and group parsing."""
 
 from __future__ import annotations
 
 import pytest
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS
 
-from wally.agent import _check_filters
-
-
-def test_none_filters_accepted() -> None:
-    _check_filters(None)  # must not raise
+from wally.agent import _parse_filter_node
+from wally.searcher import FilterGroup, FilterLeaf
 
 
-def test_empty_filters_accepted() -> None:
-    _check_filters({})  # must not raise
+def _parse(raw):
+    return _parse_filter_node(raw, PHOTO_FIELDS)
 
 
-def test_known_fields_accepted() -> None:
-    _check_filters({"dateTaken": {"min": "2024"}, "rating": {"min": 4}})
+def test_none_equivalent_accepted() -> None:
+    group = _parse({})
+    assert isinstance(group, FilterGroup)
+    assert group.children == []
+
+
+def test_single_known_field_accepted() -> None:
+    leaf = _parse({"dateTaken": {"min": "2024"}})
+    assert isinstance(leaf, FilterLeaf)
+    assert leaf.field == "dateTaken"
 
 
 def test_single_unknown_field_raises() -> None:
     with pytest.raises(ValueError, match="Unknown filter field"):
-        _check_filters({"mood": "happy"})
+        _parse({"mood": "happy"})
 
 
-def test_multiple_unknown_fields_listed_in_error() -> None:
-    with pytest.raises(ValueError) as exc_info:
-        _check_filters({"mood": "happy", "weather": "sunny", "dateTaken": {"min": "2024"}})
-    msg = str(exc_info.value)
-    assert "mood" in msg
-    assert "weather" in msg
-    assert "dateTaken" not in msg  # known field must not appear in the error
+def test_multi_key_flat_dict_raises() -> None:
+    with pytest.raises(ValueError, match="all"):
+        _parse({"make": "nikon", "rating": {"min": 4}})
+
+
+def test_multi_key_flat_dict_error_mentions_all() -> None:
+    with pytest.raises(ValueError, match='"all"'):
+        _parse({"dateTaken": {"min": "2024"}, "rating": {"min": 4}})
 
 
 def test_error_message_mentions_list_tool() -> None:
     with pytest.raises(ValueError, match="list_search_fields"):
-        _check_filters({"nonexistent": "value"})
+        _parse({"nonexistent": "value"})
+
+
+def test_all_key_produces_and_group() -> None:
+    group = _parse({"all": [{"make": "nikon"}, {"rating": {"min": 4}}]})
+    assert group.logic == "AND"
+    assert len(group.children) == 2
+
+
+def test_any_key_produces_or_group() -> None:
+    group = _parse({"any": [{"make": "nikon"}, {"make": "canon"}]})
+    assert group.logic == "OR"
+    assert len(group.children) == 2
+
+
+def test_nested_group_parses_correctly() -> None:
+    raw = {
+        "all": [
+            {"dateTaken": {"min": "2024", "max": "2024"}},
+            {"any": [{"make": "nikon"}, {"make": "canon"}]},
+        ]
+    }
+    group = _parse(raw)
+    assert group.logic == "AND"
+    assert len(group.children) == 2
+    date_leaf = group.children[0]
+    or_sub = group.children[1]
+    assert isinstance(date_leaf, FilterLeaf)
+    assert date_leaf.field == "dateTaken"
+    assert isinstance(or_sub, FilterGroup)
+    assert or_sub.logic == "OR"
+    assert len(or_sub.children) == 2
+
+
+def test_unknown_field_inside_group_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown filter field"):
+        _parse({"any": [{"mood": "happy"}, {"make": "nikon"}]})
