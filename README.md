@@ -22,6 +22,10 @@ See [wally_LLD.md](wally_LLD.md)
 pip install wally
 ```
 
+System prerequisites:
+- **macOS**: `brew install inih brotli gettext` (required by pyexiv2 at runtime)
+- **Linux/Windows**: no extra steps
+
 ### From source (development)
 
 Requires the sibling `ouestcharlie-py-toolkit` repo:
