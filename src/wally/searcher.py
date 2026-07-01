@@ -230,9 +230,9 @@ async def search_photos(
 
     try:
         summary, _ = await store.read_summary()
-    except FileNotFoundError:
-        _log.info("No summary.json — library is unindexed, returning empty result")
-        return result
+    except FileNotFoundError as err:
+        _log.error("summary.json missing — library has not been indexed")
+        raise ValueError("Library index not found. Run a full index to use search.") from err
     except Exception as exc:
         _log.error("Failed to read summary.json: %s", exc)
         raise Exception(f"summary.json: {exc}") from exc

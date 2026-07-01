@@ -524,11 +524,10 @@ async def test_avif_hash_propagated_to_match(backend: LocalBackend) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_root_manifest_returns_empty_result(backend: LocalBackend) -> None:
-    """No summary.json → empty result, no errors (unindexed library)."""
-    result = await search_photos(backend, SearchPredicate())
-    assert result.matches == []
-    assert result.errors == 0
+async def test_missing_root_manifest_raises_error(backend: LocalBackend) -> None:
+    """No summary.json → ValueError suggesting user runs a full index."""
+    with pytest.raises(ValueError, match="full index"):
+        await search_photos(backend, SearchPredicate())
 
 
 @pytest.mark.asyncio
