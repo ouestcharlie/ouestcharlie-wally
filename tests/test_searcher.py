@@ -95,7 +95,7 @@ async def _leaf(
     summary: ManifestSummary | None = None,
 ) -> None:
     """Write photos to LanceDB and register the partition in summary.json."""
-    lance_index = await LanceIndex.open_or_create(backend, PHOTO_TABLE_NAME)
+    lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
 
     thumbnail_lookup: dict[str, tuple[str, int]] = {}
     if chunks:
