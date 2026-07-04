@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
@@ -196,6 +197,7 @@ async def search_photos(
     sort_by: str = "date_taken",
     sort_order: str = "desc",
     page: int = 0,
+    lance_index_path: Path | None = None,
 ) -> SearchResult:
     """Search all photos matching predicate using the LanceDB columnar index.
 
@@ -246,7 +248,7 @@ async def search_photos(
         raise ValueError(msg)
 
     try:
-        lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
+        lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, index_path=lance_index_path)
     except FileNotFoundError as err:
         _log.error("LanceDB index missing")
         raise ValueError("LanceDB index missing for backend. Run a full index.") from err

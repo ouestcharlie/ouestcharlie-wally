@@ -225,6 +225,7 @@ class WallyAgent(AgentBase):
                     sort_by=sort_by,
                     sort_order=sort_order,
                     page=page,
+                    lance_index_path=self.lance_index_path_override,
                 )
             except Exception as exc:
                 raise ToolError(str(exc)) from exc
