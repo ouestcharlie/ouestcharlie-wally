@@ -35,7 +35,7 @@ async def _leaf(
     photos: list[PhotoEntry],
     summary: ManifestSummary | None = None,
 ) -> None:
-    lance_index = await LanceIndex.open_or_create(backend, PHOTO_TABLE_NAME)
+    lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
     await lance_index.upsert_partition(partition, photos, None)
 
     store = ManifestStore(backend)

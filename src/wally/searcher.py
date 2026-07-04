@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ouestcharlie_toolkit.backend import Backend
@@ -196,6 +197,7 @@ async def search_photos(
     sort_by: str = "date_taken",
     sort_order: str = "desc",
     page: int = 0,
+    lance_index_path: Path | None = None,
 ) -> SearchResult:
     """Search all photos matching predicate using the LanceDB columnar index.
 
@@ -230,9 +232,9 @@ async def search_photos(
 
     try:
         summary, _ = await store.read_summary()
-    except FileNotFoundError:
-        _log.info("No summary.json — library is unindexed, returning empty result")
-        return result
+    except FileNotFoundError as err:
+        _log.error("summary.json missing — library has not been indexed")
+        raise ValueError("Library index not found. Run a full index to use search.") from err
     except Exception as exc:
         _log.error("Failed to read summary.json: %s", exc)
         raise Exception(f"summary.json: {exc}") from exc
@@ -246,7 +248,7 @@ async def search_photos(
         raise ValueError(msg)
 
     try:
-        lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
+        lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, index_path=lance_index_path)
     except FileNotFoundError as err:
         _log.error("LanceDB index missing")
         raise ValueError("LanceDB index missing for backend. Run a full index.") from err

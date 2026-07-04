@@ -95,7 +95,7 @@ async def _leaf(
     summary: ManifestSummary | None = None,
 ) -> None:
     """Write photos to LanceDB and register the partition in summary.json."""
-    lance_index = await LanceIndex.open_or_create(backend, PHOTO_TABLE_NAME)
+    lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
 
     thumbnail_lookup: dict[str, tuple[str, int]] = {}
     if chunks:
@@ -524,11 +524,10 @@ async def test_avif_hash_propagated_to_match(backend: LocalBackend) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_root_manifest_returns_empty_result(backend: LocalBackend) -> None:
-    """No summary.json → empty result, no errors (unindexed library)."""
-    result = await search_photos(backend, SearchPredicate())
-    assert result.matches == []
-    assert result.errors == 0
+async def test_missing_root_manifest_raises_error(backend: LocalBackend) -> None:
+    """No summary.json → ValueError suggesting user runs a full index."""
+    with pytest.raises(ValueError, match="full index"):
+        await search_photos(backend, SearchPredicate())
 
 
 @pytest.mark.asyncio

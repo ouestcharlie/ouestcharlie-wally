@@ -23,7 +23,7 @@ def _make_app(backend_root: Path) -> MediaMiddleware:
 
     return MediaMiddleware(
         _fallback,
-        backend_config={"type": "filesystem", "root": str(backend_root)},
+        backend_config={"type": "filesystem", "path": str(backend_root)},
         backend_name=BACKEND_NAME,
     )
 
