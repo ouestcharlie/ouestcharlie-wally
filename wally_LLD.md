@@ -54,8 +54,9 @@ tests/
 | `hasMore` | `bool` | `true` when further pages exist (`(page + 1) * pageSize < totalCount`) |
 | `errors` | `int` | Query failures |
 | `errorDetails` | `string[]` | Per-failure messages |
-| `tagFacets` | `object` | `{tag: count}` map over the full (unpaginated) result set |
 | `matches` | `PhotoMatch[]` | One page of matching photo records (up to `pageSize`) |
+
+`search_photos` does not compute a tag-facet breakdown — call `get_summary` with the same `filters` for that (and other aggregate stats), scoped identically. Computing facets on every page fetch was wasted work for callers that only need matches.
 
 **PhotoMatch fields**: `partition`, `filename`, `contentHash`, `tileIndex`, `avifHash`, plus any searchable metadata fields driven by `PHOTO_FIELDS` (e.g. `dateTaken` as ISO 8601, `rating`, `tags`, `make`, `model`, `width`, `height`) — serialized by name using `FieldDef.name` as the JSON key. When a `full_text_filter` was applied, each match also includes `score` (LanceDB relevance score, higher is better).
 
@@ -190,26 +191,36 @@ Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` di
 
 When `full_text_filter` is set, results are ranked by relevance instead (`nearest_to_text`) — `sort_by` / `sort_order` are ignored.
 
-Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` returns `(AsyncIterator[dict], total_count, tag_facets)` — callers iterate the page with `async for`, use `total_count` to compute `hasMore`, and expose `tag_facets` as a `{tag: count}` map over the full unpaginated result set.
+Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` returns `(page_rows, total_count)` — callers use `total_count` to compute `hasMore`. Tag facets are not part of this return value; `LanceIndex.tag_facets_where(where_clause)` is a separate method, called only by `get_summary` (see below), not on every page fetch.
 
 ## Error Handling
 
 | Situation | Behavior |
 |---|---|
-| `summary.json` absent | Empty `SearchResult`, `errors == 0` (unindexed library) |
+| `summary.json` absent | `ValueError` raised — user must run a full index (unindexed library) |
 | `summary.json` schema version mismatch | `ValueError` raised — user must run a full re-index |
 | LanceDB index absent despite valid `summary.json` | `ValueError` raised — index is corrupt or incomplete |
 | LanceDB query failure | `errors += 1`, message in `error_details`, empty matches returned |
 | Progress notification failure | Caught and logged at DEBUG; search continues |
+
+`get_summary` shares the same schema-version check and error handling as `search_photos` (both go through `_open_verified_index` / `_verify_index_ready` in `searcher.py`).
 
 ## MCP Tools Summary
 
 | Tool | Description |
 |---|---|
 | `search_photos` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
+| `get_summary` | Aggregate stats (count, date/rating/width/height/GPS ranges, tag facets) for photos matching the same filter syntax as `search_photos`, computed on demand from the LanceDB index — no precomputed data. Empty `filters` summarizes the whole library. The only tool that returns a tag-facet breakdown. See [Runtime Summaries](../HLD.md#runtime-summaries) in the HLD for the rationale (replaces the old precomputed root `summary.json` partition list). |
 | `list_search_fields` | Return all queryable fields with types and filter formats |
-| `get_partition_summaries` | Return the root summary (all indexed partitions with statistics) |
 | `get_http_port_tool` | Return the port Wally's HTTP preview server is listening on (diagnostic) |
+
+### `get_summary` implementation
+
+`searcher.get_summary(backend, predicate)` reuses `_build_where_clause`/`_build_group` — the exact same filter-to-SQL translation as `search_photos` (see [SQL clause mapping](#sql-clause-mapping) above) — then runs two independent queries against the same `where_clause`:
+1. `ouestcharlie_toolkit.partition_summary.aggregate_where(lance_index, where_clause)`, a single DuckDB aggregation (`COUNT`/`MIN`/`MAX`) over the Arrow table LanceDB returns for that WHERE clause.
+2. `lance_index.tag_facets_where(where_clause)`, a lightweight scan of the `tags` column producing a `{tag: count}` map.
+
+It returns `(ManifestSummary, tag_facets)`; the MCP tool merges both into one response dict with `tagFacets` alongside the range stats. The `filters` wire format, parsing (`_parse_filter_node` in `agent.py`), and validation are identical to `search_photos` — the MCP tool docstrings share one `_FILTER_SYNTAX_DOC` constant so the syntax is documented once, not per tool.
 
 ## Scope and Deferred Items
 
@@ -217,7 +228,7 @@ Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` retur
 - Predicates: date range, tags (AND), rating range, camera make/model substring, GPS bounding box
 - Full-text search over `TEXT`-typed fields (currently `description`) via `full_text_filter`
 - Relevance-ranked results with `score` per match when FTS is used
-- `tagFacets` aggregation over the full result set
+- `tagFacets` aggregation over the full matching set (via `get_summary`, not `search_photos`)
 - Native LanceDB sort with deterministic `filename` tiebreaker
 - Result pagination (500 photos per page)
 - Single backend per Woof invocation

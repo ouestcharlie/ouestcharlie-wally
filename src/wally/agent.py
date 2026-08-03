@@ -10,7 +10,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.lance_index import FtsFilter
-from ouestcharlie_toolkit.schema import serialize_summary
+from ouestcharlie_toolkit.schema import ManifestSummary, _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
@@ -22,8 +22,51 @@ from .searcher import (
     RangeFilter,
     SearchPredicate,
     StringFilter,
+    get_summary,
     search_photos,
 )
+
+# Shared filter-syntax documentation, embedded in both search_photos and
+# get_summary's docstrings so the `all`/`any`/leaf syntax is documented once.
+_FILTER_SYNTAX_DOC = """\
+filters: Filter expression. Three forms are accepted:
+
+    **Single field** — one ``{"fieldName": value}`` dict::
+
+        # All photos under the 2024/ directory tree
+        {"directory": {"value": "2024", "mode": "startswith"}}
+
+    **``{"all": [...]}``** — AND group (all must match)::
+
+        # 4K Nikon shots in 2024
+        {"all": [
+            {"dateTaken": {"min": "2024", "max": "2024"}},
+            {"make": "nikon"},
+            {"width": {"min": 3840}}
+        ]}
+
+    **``{"any": [...]}``** — OR group (at least one must match)::
+
+        # Photos shot on Nikon OR Canon
+        {"any": [{"make": "nikon"}, {"make": "canon"}]}
+
+    Groups can be nested::
+
+        # 2024 photos on Nikon OR Canon
+        {"all": [
+            {"dateTaken": {"min": "2024", "max": "2024"}},
+            {"any": [{"make": "nikon"}, {"make": "canon"}]}
+        ]}
+full_text_filter: Full-text search over one or more TEXT-typed
+    fields. Schema::
+
+        {"query": "Canyon", "columns": ["description"]}
+
+    ``query`` is a single search string applied across all listed
+    columns. ``columns`` must be entry_attr names of TEXT-typed
+    fields (see ``list_search_fields`` → ``full_text_search.fields``).
+    Results are relevance-ranked and each match includes ``_score``.
+    Compatible with ``filters`` (SQL predicates applied on top of FTS)."""
 
 
 class WallyAgent(AgentBase):
@@ -32,7 +75,10 @@ class WallyAgent(AgentBase):
     Receives ``WOOF_BACKEND_CONFIG`` from the environment (set by Woof before
     launching). Exposes MCP tools:
     - ``list_search_fields``: returns all queryable fields with types and formats.
-    - ``get_partition_summaries``: returns the root summary for the backend.
+    - ``get_summary``: aggregate stats (count, date/rating/GPS ranges, tag facets)
+      over photos matching a filter expression — same filter syntax as
+      ``search_photos``. Computed at query time from the LanceDB index, no
+      precomputed data.
     - ``search_photos``: searches photos using a structured filter expression
       (flat AND dict, ``all``/``any`` groups, or nested combinations).
 
@@ -112,22 +158,56 @@ class WallyAgent(AgentBase):
                 },
             }
 
-        @mcp.tool()
-        async def get_partition_summaries() -> dict:
-            """Return the summary of all partitions of this backend as a plain dict.
-
-            The summary contains a flat list of all indexed partitions with
-            their statistics (photo count, date range, rating range, GPS bbox).
-
-            Returns ``{"unindexed": True}`` if no summary.json exists yet.
-            """
+        async def _get_summary_tool(
+            filters: dict | None = None,
+        ) -> dict:
             try:
-                summary, _ = await self.manifest_store.read_summary()
-            except FileNotFoundError:
-                return {"unindexed": True}
-            return serialize_summary(summary)
+                node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
 
-        @mcp.tool(name="search_photos")
+            root_group = (
+                node if isinstance(node, FilterGroup) else FilterGroup(logic="AND", children=[node])
+            )
+            predicate = SearchPredicate(root=root_group)
+
+            try:
+                summary, tag_facets = await get_summary(
+                    self.backend,
+                    predicate=predicate,
+                    lance_index_path=self.lance_index_path_override,
+                )
+            except Exception as exc:
+                raise ToolError(str(exc)) from exc
+
+            return {**_manifest_summary_to_dict(summary), "tagFacets": tag_facets}
+
+        # Docstring assigned before registration — the decorator below reads
+        # __doc__ immediately to build the tool description.
+        _get_summary_tool.__doc__ = f"""Compute aggregate statistics for photos matching a filter.
+
+            Returns count, per-field ranges (date, rating, width/height, GPS
+            bounding box), and tag facets — computed on demand from the LanceDB
+            index, not a precomputed/cached value. An empty ``filters`` summarizes
+            the whole library. Scope it the same way you would scope a
+            ``search_photos`` call, e.g. a directory prefix or a date range, to
+            get a narrower summary instead of the whole-library one.
+
+            Use ``list_search_fields`` to discover all available fields and
+            their expected filter formats.
+
+            Args:
+                {_FILTER_SYNTAX_DOC}
+
+            Returns:
+                ``photoCount`` — number of matching photos.
+                Per-field range stats (``dateTaken``, ``rating``, ``width``,
+                ``height``, ``gps``), each present only if at least one matching
+                photo has a value for that field.
+                ``tagFacets`` — ``{{tag: count}}`` map over the matching set.
+            """
+        mcp.tool(name="get_summary")(_get_summary_tool)
+
         async def _search_photos_tool(
             ctx: Context,
             filters: dict | None = None,
@@ -136,64 +216,6 @@ class WallyAgent(AgentBase):
             sort_order: str = "desc",
             page: int = 0,
         ) -> dict:
-            """Search photos matching structured predicates.
-
-            Executes a SQL query against the LanceDB columnar index. At least
-            one filter is required. An unscoped, unfiltered search over the
-            entire backend is refused — use ``get_partition_summaries`` instead
-            to browse the library overview.
-
-            Use ``list_search_fields`` to discover all available fields and
-            their expected filter formats.
-
-            Args:
-                filters: Filter expression. Three forms are accepted:
-
-                    **Single field** — one ``{"fieldName": value}`` dict::
-
-                        # All photos under the 2024/ directory tree
-                        {"directory": {"value": "2024", "mode": "startswith"}}
-
-                    **``{"all": [...]}``** — AND group (all must match)::
-
-                        # 4K Nikon shots in 2024
-                        {"all": [
-                            {"dateTaken": {"min": "2024", "max": "2024"}},
-                            {"make": "nikon"},
-                            {"width": {"min": 3840}}
-                        ]}
-
-                    **``{"any": [...]}``** — OR group (at least one must match)::
-
-                        # Photos shot on Nikon OR Canon
-                        {"any": [{"make": "nikon"}, {"make": "canon"}]}
-
-                    Groups can be nested::
-
-                        # 2024 photos on Nikon OR Canon
-                        {"all": [
-                            {"dateTaken": {"min": "2024", "max": "2024"}},
-                            {"any": [{"make": "nikon"}, {"make": "canon"}]}
-                        ]}
-                full_text_filter: Full-text search over one or more TEXT-typed
-                    fields. Schema::
-
-                        {"query": "Canyon", "columns": ["description"]}
-
-                    ``query`` is a single search string applied across all listed
-                    columns. ``columns`` must be entry_attr names of TEXT-typed
-                    fields (see ``list_search_fields`` → ``full_text_search.fields``).
-                    Results are relevance-ranked and each match includes ``_score``.
-                    Compatible with ``filters`` (SQL predicates applied on top of FTS).
-
-            Returns:
-                ``matches`` — list of matching photo records.
-                ``totalCount`` — total matches across all pages.
-                ``tagFacets`` — ``{tag: count}`` map over the full result set.
-                ``errors`` — count of read failures.
-                ``errorDetails`` — per-failure error messages.
-            """
-
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
             except ValueError as exc:
@@ -237,9 +259,34 @@ class WallyAgent(AgentBase):
                 "hasMore": result.has_more,
                 "errors": result.errors,
                 "errorDetails": result.error_details,
-                "tagFacets": result.tag_facets,
                 "matches": [_match_to_dict(m) for m in result.matches],
             }
+
+        # Docstring assigned before registration — the decorator below reads
+        # __doc__ immediately to build the tool description.
+        _search_photos_tool.__doc__ = f"""Search photos matching structured predicates.
+
+            Executes a SQL query against the LanceDB columnar index. At least
+            one filter is required. An unscoped, unfiltered search over the
+            entire backend is refused — use ``get_summary`` instead to browse
+            the library overview.
+
+            Use ``list_search_fields`` to discover all available fields and
+            their expected filter formats.
+
+            Args:
+                {_FILTER_SYNTAX_DOC}
+
+            Returns:
+                ``matches`` — list of matching photo records.
+                ``totalCount`` — total matches across all pages.
+                ``errors`` — count of read failures.
+                ``errorDetails`` — per-failure error messages.
+
+                Does not include a tag-facet breakdown — call ``get_summary``
+                with the same ``filters`` for aggregate stats including tags.
+            """
+        mcp.tool(name="search_photos")(_search_photos_tool)
 
 
 # ---------------------------------------------------------------------------
@@ -438,4 +485,15 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["avifHash"] = m.avif_hash
     if m.score is not None:
         d["score"] = m.score
+    return d
+
+
+def _manifest_summary_to_dict(summary: ManifestSummary) -> dict:
+    """Serialize a ManifestSummary for the get_summary tool response.
+
+    Drops ``path`` — get_summary aggregates are scoped by filter predicate,
+    not tied to a single partition.
+    """
+    d = _summary_to_dict(summary)
+    d.pop("path", None)
     return d
