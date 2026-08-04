@@ -1,12 +1,6 @@
 """Core photo search logic for Wally.
 
-Pure async module — no MCP dependency. Independently testable.
-
-The search algorithm queries the LanceDB columnar index at
-.ouestcharlie/index.lance/ — a single SQL predicate replaces the two-level
-JSON pruning + manifest scan approach of schema v2.
-
-Wally is read-only — it never writes to manifests or XMP sidecars.
+The search algorithm queries the LanceDB columnar index.
 """
 
 from __future__ import annotations
@@ -27,7 +21,7 @@ from ouestcharlie_toolkit.lance_index import (
     _esc,
 )
 from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.partition_summary import aggregate_where
+from ouestcharlie_toolkit.partition_summary import compute_summary
 from ouestcharlie_toolkit.schema import SCHEMA_VERSION, ManifestSummary
 
 _log = logging.getLogger(__name__)
@@ -318,47 +312,34 @@ async def search_photos(
 async def get_summary(
     backend: Backend,
     predicate: SearchPredicate,
+    fts_filter: FtsFilter | None = None,
     field_config: list[FieldDef] | None = None,
     lance_index_path: Path | None = None,
-) -> tuple[ManifestSummary, dict[str, int]]:
+) -> ManifestSummary:
     """Compute aggregate summary statistics (count, date/rating/GPS ranges, tags, ...)
     over all photos matching predicate, using the LanceDB columnar index.
-
-    Runtime replacement for the old precomputed root summary.json: rather than
-    a single global, precomputed blob updated on every indexing pass (the
-    concurrency and payload-size problems that motivated this design), the
-    summary is computed on demand, scoped by the same filter predicates as
-    ``search_photos``. An empty predicate summarizes the whole library.
-
-    This is also the sole place tag facets are computed — ``search_photos``
-    no longer returns them (see its docstring), since callers that need a
-    tag breakdown can request one explicitly, scoped the same way, without
-    every page fetch paying for a facet scan.
-
-    Reads summary.json only to verify the schema version (same check as
-    ``search_photos``) — same missing/stale-version error handling.
 
     Args:
         backend:      Backend to search (read-only).
         predicate:    Filter to scope the aggregate to. An empty predicate
                       summarizes the whole library.
+        fts_filter:   Optional full-text filter, scoping the aggregate to
+                      photos matching the query — same semantics as
+                      ``search_photos``'s ``fts_filter``.
         field_config: Field definitions driving filter logic. Defaults to
                       PHOTO_FIELDS from ouestcharlie_toolkit.fields.
 
     Returns:
-        Tuple of (ManifestSummary, tag_facets):
-        - ManifestSummary has photo_count and per-field min/max/missing stats
-          (path is left empty — this is not scoped to a single partition).
-        - tag_facets is a ``{tag: count}`` dict over the matching set.
+        ManifestSummary with photo_count, per-field min/max/missing stats,
+        and (when any photos have tags) a ``tags`` stat of
+        ``{"type": "tag_facets", "counts": {tag: count, ...}}``.
     """
     if field_config is None:
         field_config = PHOTO_FIELDS
 
     lance_index = await _open_verified_index(backend, lance_index_path)
     where_clause = _build_where_clause(predicate, field_config)
-    summary = await aggregate_where(lance_index, where_clause)
-    tag_facets = await lance_index.tag_facets_where(where_clause)
-    return summary, tag_facets
+    return await compute_summary(lance_index, where_clause, fts_filter=fts_filter)
 
 
 # ---------------------------------------------------------------------------

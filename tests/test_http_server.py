@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from wally.http_server import MediaMiddleware
+from wally.http_server import MediaMiddleware, _generate_preview
 
 BACKEND_NAME = "testlib"
 FAKE_AVIF = b"AVIF_FAKE_DATA"
@@ -126,6 +126,32 @@ async def test_preview_generation_uses_persistent_image_proc(tmp_path: Path) -> 
 
     assert resp.status_code == 200
     assert resp.content == b"GENERATED_PREVIEW"
+
+
+# ---------------------------------------------------------------------------
+# _generate_preview — LanceIndex.search_where result handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_generate_preview_no_match_raises_not_found(tmp_path: Path) -> None:
+    """search_where returns a 2-tuple (rows, total_count); an empty result must
+    raise FileNotFoundError rather than crash or silently do nothing."""
+    fake_index = AsyncMock()
+    fake_index.search_where.return_value = ([], 0)
+
+    with (
+        patch("wally.http_server.LanceIndex.open", AsyncMock(return_value=fake_index)),
+        patch("wally.http_server.generate_preview_jpeg", AsyncMock()) as fake_generate_jpeg,
+        pytest.raises(FileNotFoundError),
+    ):
+        await _generate_preview(
+            backend=object(),
+            partition="2024/2024-07",
+            content_hash="doesnotexist",
+            image_proc=object(),
+        )
+    fake_generate_jpeg.assert_not_awaited()
 
 
 @pytest.mark.asyncio

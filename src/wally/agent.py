@@ -10,7 +10,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.lance_index import FtsFilter
-from ouestcharlie_toolkit.schema import ManifestSummary, _summary_to_dict
+from ouestcharlie_toolkit.schema import _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
@@ -160,6 +160,7 @@ class WallyAgent(AgentBase):
 
         async def _get_summary_tool(
             filters: dict | None = None,
+            full_text_filter: dict | None = None,
         ) -> dict:
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
@@ -172,26 +173,30 @@ class WallyAgent(AgentBase):
             predicate = SearchPredicate(root=root_group)
 
             try:
-                summary, tag_facets = await get_summary(
+                fts = _build_fts_filter(full_text_filter)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+
+            try:
+                summary = await get_summary(
                     self.backend,
                     predicate=predicate,
+                    fts_filter=fts,
                     lance_index_path=self.lance_index_path_override,
                 )
             except Exception as exc:
                 raise ToolError(str(exc)) from exc
 
-            return {**_manifest_summary_to_dict(summary), "tagFacets": tag_facets}
+            return _summary_to_dict(summary)
 
         # Docstring assigned before registration — the decorator below reads
         # __doc__ immediately to build the tool description.
         _get_summary_tool.__doc__ = f"""Compute aggregate statistics for photos matching a filter.
 
             Returns count, per-field ranges (date, rating, width/height, GPS
-            bounding box), and tag facets — computed on demand from the LanceDB
-            index, not a precomputed/cached value. An empty ``filters`` summarizes
-            the whole library. Scope it the same way you would scope a
-            ``search_photos`` call, e.g. a directory prefix or a date range, to
-            get a narrower summary instead of the whole-library one.
+            bounding box), and tag facets. An empty ``filters`` summarizes
+            the whole library. Scope it to a query using the filter, optionally
+            combined with ``full_text_filter`` — same semantics as ``search_photos``.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
@@ -204,7 +209,8 @@ class WallyAgent(AgentBase):
                 Per-field range stats (``dateTaken``, ``rating``, ``width``,
                 ``height``, ``gps``), each present only if at least one matching
                 photo has a value for that field.
-                ``tagFacets`` — ``{{tag: count}}`` map over the matching set.
+                ``tags`` — ``{{"type": "tag_facets", "counts": {{tag: count}}}}``
+                over the matching set, present only if any matching photo has tags.
             """
         mcp.tool(name="get_summary")(_get_summary_tool)
 
@@ -266,10 +272,9 @@ class WallyAgent(AgentBase):
         # __doc__ immediately to build the tool description.
         _search_photos_tool.__doc__ = f"""Search photos matching structured predicates.
 
-            Executes a SQL query against the LanceDB columnar index. At least
-            one filter is required. An unscoped, unfiltered search over the
-            entire backend is refused — use ``get_summary`` instead to browse
-            the library overview.
+            Executes a SQL query against the LanceDB columnar index.
+
+            Use ``get_summary`` to get an overview.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
@@ -485,15 +490,4 @@ def _match_to_dict(m: PhotoMatch) -> dict:
         d["avifHash"] = m.avif_hash
     if m.score is not None:
         d["score"] = m.score
-    return d
-
-
-def _manifest_summary_to_dict(summary: ManifestSummary) -> dict:
-    """Serialize a ManifestSummary for the get_summary tool response.
-
-    Drops ``path`` — get_summary aggregates are scoped by filter predicate,
-    not tied to a single partition.
-    """
-    d = _summary_to_dict(summary)
-    d.pop("path", None)
     return d
