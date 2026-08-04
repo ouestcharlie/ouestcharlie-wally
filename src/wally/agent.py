@@ -109,8 +109,6 @@ class WallyAgent(AgentBase):
                     ``type`` — semantic type (DATE_RANGE, INT_RANGE, STRING_COLLECTION,
                         STRING_MATCH, GPS_BOX, DESCRIPTIVE).
                     ``filterFormat`` — description of the expected value format.
-                    ``pruneable`` — True if this field supports partition-level pruning
-                        (faster searches on large libraries).
             """
             _FORMAT: dict[FieldType, str] = {
                 FieldType.DATE_RANGE: (
