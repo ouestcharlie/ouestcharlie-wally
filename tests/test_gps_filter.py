@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import pytest
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
 from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import ManifestSummary, PhotoEntry
+from ouestcharlie_toolkit.schema import SCHEMA_VERSION, PhotoEntry, RootSummary
 
 from wally.searcher import FilterGroup, FilterLeaf, GpsBoxFilter, SearchPredicate, search_photos
 
@@ -33,16 +34,13 @@ async def _leaf(
     backend: LocalBackend,
     partition: str,
     photos: list[PhotoEntry],
-    summary: ManifestSummary | None = None,
 ) -> None:
     lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
     await lance_index.upsert_partition(partition, photos, None)
 
     store = ManifestStore(backend)
-    ps = (
-        summary if summary is not None else ManifestSummary(path=partition, photo_count=len(photos))
-    )
-    await store.upsert_partition_in_summary(ps)
+    with contextlib.suppress(FileExistsError):
+        await store.create_summary(RootSummary(schema_version=SCHEMA_VERSION))
 
 
 # ---------------------------------------------------------------------------
@@ -193,11 +191,8 @@ async def test_overlapping_partition_returns_match(backend: LocalBackend) -> Non
 
 @pytest.mark.asyncio
 async def test_no_gps_summary_still_searched(backend: LocalBackend) -> None:
-    """Partition without GPS bbox summary is still searched."""
-    no_gps_summary = ManifestSummary(path="legacy", _stats={})
-    await _leaf(
-        backend, "legacy", [_entry("photo.jpg", lat=48.85, lon=2.35)], summary=no_gps_summary
-    )
+    """Partition with no precomputed GPS bbox stats is still searched (query-time filter only)."""
+    await _leaf(backend, "legacy", [_entry("photo.jpg", lat=48.85, lon=2.35)])
 
     result = await search_photos(
         backend,

@@ -1,12 +1,6 @@
 """Core photo search logic for Wally.
 
-Pure async module — no MCP dependency. Independently testable.
-
-The search algorithm queries the LanceDB columnar index at
-.ouestcharlie/index.lance/ — a single SQL predicate replaces the two-level
-JSON pruning + manifest scan approach of schema v2.
-
-Wally is read-only — it never writes to manifests or XMP sidecars.
+The search algorithm queries the LanceDB columnar index.
 """
 
 from __future__ import annotations
@@ -27,7 +21,8 @@ from ouestcharlie_toolkit.lance_index import (
     _esc,
 )
 from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import SCHEMA_VERSION
+from ouestcharlie_toolkit.partition_summary import compute_summary
+from ouestcharlie_toolkit.schema import SCHEMA_VERSION, ManifestSummary
 
 _log = logging.getLogger(__name__)
 
@@ -180,12 +175,49 @@ class SearchResult:
     page: int = 1
     page_size: int = PAGE_SIZE
     has_more: bool = False
-    tag_facets: dict[str, int] = field(default_factory=dict)  # {tag: count} over full result set
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
+
+async def _verify_index_ready(backend: Backend) -> None:
+    """Verify summary.json exists and its schema version is current.
+
+    A missing summary.json means an unindexed library — raised as ValueError
+    so callers can surface a clear "run a full index" message (not treated as
+    an unexpected error).
+    """
+    store = ManifestStore(backend)
+    try:
+        summary, _ = await store.read_summary()
+    except FileNotFoundError as err:
+        _log.error("summary.json missing — library has not been indexed")
+        raise ValueError("Library index not found. Run a full index to use search.") from err
+    except Exception as exc:
+        _log.error("Failed to read summary.json: %s", exc)
+        raise Exception(f"summary.json: {exc}") from exc
+
+    if summary.schema_version != SCHEMA_VERSION:
+        msg = (
+            f"Library index schema version {summary.schema_version} does not match "
+            f"expected version {SCHEMA_VERSION}. Run a full index to upgrade."
+        )
+        _log.error(msg)
+        raise ValueError(msg)
+
+
+async def _open_verified_index(
+    backend: Backend, lance_index_path: Path | None = None
+) -> LanceIndex:
+    """Verify the index is ready (schema version) and open the LanceDB table."""
+    await _verify_index_ready(backend)
+    try:
+        return await LanceIndex.open(backend, PHOTO_TABLE_NAME, index_path=lance_index_path)
+    except FileNotFoundError as err:
+        _log.error("LanceDB index missing")
+        raise ValueError("LanceDB index missing for backend. Run a full index.") from err
 
 
 async def search_photos(
@@ -222,40 +254,19 @@ async def search_photos(
         page:         0-indexed page number (default 0).
 
     Returns:
-        SearchResult with one page of matching PhotoMatch entries, pagination metadata,
-        and tag_facets counts computed over the full (unpaginated) result set.
+        SearchResult with one page of matching PhotoMatch entries and pagination metadata.
+        Use ``get_summary`` for aggregate stats (including tag facets) over the full
+        matching set — search_photos no longer computes them on every page fetch.
     """
     if field_config is None:
         field_config = PHOTO_FIELDS
     result = SearchResult()
-    store = ManifestStore(backend)
 
-    try:
-        summary, _ = await store.read_summary()
-    except FileNotFoundError as err:
-        _log.error("summary.json missing — library has not been indexed")
-        raise ValueError("Library index not found. Run a full index to use search.") from err
-    except Exception as exc:
-        _log.error("Failed to read summary.json: %s", exc)
-        raise Exception(f"summary.json: {exc}") from exc
-
-    if summary.schema_version != SCHEMA_VERSION:
-        msg = (
-            f"Library index schema version {summary.schema_version} does not match "
-            f"expected version {SCHEMA_VERSION}. Run a full index to upgrade."
-        )
-        _log.error(msg)
-        raise ValueError(msg)
-
-    try:
-        lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, index_path=lance_index_path)
-    except FileNotFoundError as err:
-        _log.error("LanceDB index missing")
-        raise ValueError("LanceDB index missing for backend. Run a full index.") from err
+    lance_index = await _open_verified_index(backend, lance_index_path)
 
     where_clause = _build_where_clause(predicate, field_config)
     try:
-        matches, total_count, tag_facets = await lance_index.search_where(
+        matches, total_count = await lance_index.search_where(
             where_clause,
             fts_filter=fts_filter,
             order_by=sort_by,
@@ -267,8 +278,6 @@ async def search_photos(
         result.errors += 1
         result.error_details.append(str(exc))
         return result
-
-    result.tag_facets = tag_facets
 
     for row in matches:
         avif_hash = row.get("thumbnail_avif_hash") or None
@@ -298,6 +307,39 @@ async def search_photos(
         await on_progress(1, "")
 
     return result
+
+
+async def get_summary(
+    backend: Backend,
+    predicate: SearchPredicate,
+    fts_filter: FtsFilter | None = None,
+    field_config: list[FieldDef] | None = None,
+    lance_index_path: Path | None = None,
+) -> ManifestSummary:
+    """Compute aggregate summary statistics (count, date/rating/GPS ranges, tags, ...)
+    over all photos matching predicate, using the LanceDB columnar index.
+
+    Args:
+        backend:      Backend to search (read-only).
+        predicate:    Filter to scope the aggregate to. An empty predicate
+                      summarizes the whole library.
+        fts_filter:   Optional full-text filter, scoping the aggregate to
+                      photos matching the query — same semantics as
+                      ``search_photos``'s ``fts_filter``.
+        field_config: Field definitions driving filter logic. Defaults to
+                      PHOTO_FIELDS from ouestcharlie_toolkit.fields.
+
+    Returns:
+        ManifestSummary with photo_count, per-field min/max/missing stats,
+        and (when any photos have tags) a ``tags`` stat of
+        ``{"type": "tag_facets", "counts": {tag: count, ...}}``.
+    """
+    if field_config is None:
+        field_config = PHOTO_FIELDS
+
+    lance_index = await _open_verified_index(backend, lance_index_path)
+    where_clause = _build_where_clause(predicate, field_config)
+    return await compute_summary(lance_index, where_clause, fts_filter=fts_filter)
 
 
 # ---------------------------------------------------------------------------
