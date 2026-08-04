@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import calendar
+import logging
 from datetime import datetime
 
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
-from ouestcharlie_toolkit import report_progress
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import _summary_to_dict
@@ -25,6 +25,8 @@ from .searcher import (
     get_summary,
     search_photos,
 )
+
+_log = logging.getLogger(__name__)
 
 # Shared filter-syntax documentation, embedded in both search_photos and
 # get_summary's docstrings so the `all`/`any`/leaf syntax is documented once.
@@ -242,7 +244,14 @@ class WallyAgent(AgentBase):
             async def _on_progress(count: int, partition: str) -> None:
                 nonlocal partitions_done
                 partitions_done = count
-                await report_progress(ctx, count, count + 1, f"scanned {partition}")
+                try:
+                    await ctx.report_progress(
+                        progress=count, total=count + 1, message=f"scanned {partition}"
+                    )
+                except Exception as exc:
+                    _log.debug(
+                        "Progress notification failed (client may have disconnected): %s", exc
+                    )
 
             try:
                 result = await search_photos(
