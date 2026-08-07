@@ -185,6 +185,8 @@ LanceDB stores `date_taken` as a timezone-naive timestamp. SQL literals in WHERE
 
 Partial date strings (`"2024"`, `"2024-07"`) are expanded in `agent.py` to full `datetime` bounds before passing to `searcher.py`. The searcher works only with `datetime | None`.
 
+Date bounds also accept a time-of-day component via a `T` separator (`"2024-07-14T18"`, `"2024-07-14T18:30"`, `"2024-07-14T18:30:00"`), enabling precise time-range filtering (e.g. photos taken between 18:00 and 20:00). Missing minute/second fields default to 0, and any timezone designator is stripped. This is purely an MCP-adapter parsing concern in `_parse_date_min` / `_parse_date_max`; `searcher.py` and the storage layer are agnostic to date-vs-timestamp granularity since both already operate on full `datetime` values.
+
 ## Result Ordering and Pagination
 
 Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` direction (default `desc` — newest first) using LanceDB's native `AsyncQuery.order_by(List[ColumnOrdering])`. A `filename` tiebreaker is always appended to make pagination deterministic when the primary key (e.g. `date_taken`) is NULL or duplicated across rows.

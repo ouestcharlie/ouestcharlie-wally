@@ -6,6 +6,7 @@ import calendar
 import logging
 from datetime import datetime
 
+from dateutil.parser import isoparse
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
@@ -113,7 +114,9 @@ class WallyAgent(AgentBase):
             _FORMAT: dict[FieldType, str] = {
                 FieldType.DATE_RANGE: (
                     'object with optional "min" and/or "max" (ISO 8601 string; '
-                    'partial dates supported: "2024", "2024-07", "2024-07-14")'
+                    'partial dates supported: "2024", "2024-07", "2024-07-14"; '
+                    'time-of-day supported via a "T" component: '
+                    '"2024-07-14T18", "2024-07-14T18:30", "2024-07-14T18:30:00")'
                 ),
                 FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
                 FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
@@ -421,40 +424,58 @@ def _build_fts_filter(full_text_filter: dict | None) -> FtsFilter | None:
 
 
 def _parse_date_min(s: str | None) -> datetime | None:
-    """Parse an optional date string as an inclusive lower bound.
+    """Parse an optional date/datetime string as an inclusive lower bound.
 
     Partial dates are expanded to their earliest instant:
-      "2024"       → datetime(2024, 1, 1, 0, 0, 0)
-      "2024-07"    → datetime(2024, 7, 1, 0, 0, 0)
-      "2024-07-14" → datetime(2024, 7, 14, 0, 0, 0)
-    Full ISO 8601 timestamps are parsed as-is (timezone stripped).
+      "2024"                → datetime(2024, 1, 1, 0, 0, 0)
+      "2024-07"             → datetime(2024, 7, 1, 0, 0, 0)
+      "2024-07-14"          → datetime(2024, 7, 14, 0, 0, 0)
+    A time component (``T``-separated) is applied as-is, with missing
+    minute/second fields defaulting to 0:
+      "2024-07-14T18"       → datetime(2024, 7, 14, 18, 0, 0)
+      "2024-07-14T18:30"    → datetime(2024, 7, 14, 18, 30, 0)
+      "2024-07-14T18:30:15" → datetime(2024, 7, 14, 18, 30, 15)
+    Any timezone designator is stripped (naive datetime returned).
     """
     if s is None:
         return None
-    parts = s.strip().split("T")[0].split("-")
+    s = s.strip()
     try:
-        if len(parts) == 1:
-            return datetime(int(parts[0]), 1, 1, 0, 0, 0)
-        elif len(parts) == 2:
-            return datetime(int(parts[0]), int(parts[1]), 1, 0, 0, 0)
-        else:
-            return datetime(int(parts[0]), int(parts[1]), int(parts[2]), 0, 0, 0)
+        if "T" in s:
+            # Delegate full/partial time, fractional-second and timezone-offset
+            # parsing to isoparse; strip tz so the result is naive (matching how
+            # date_taken is stored). Missing minute/second fields default to 0.
+            return isoparse(s).replace(tzinfo=None)
+        parts = s.split("-")
+        year = int(parts[0])
+        month = int(parts[1]) if len(parts) > 1 else 1
+        day = int(parts[2]) if len(parts) > 2 else 1
+        return datetime(year, month, day, 0, 0, 0)
     except (ValueError, IndexError) as exc:
         raise ValueError(f"Invalid date_min {s!r}: {exc}") from exc
 
 
 def _parse_date_max(s: str | None) -> datetime | None:
-    """Parse an optional date string as an inclusive upper bound.
+    """Parse an optional date/datetime string as an inclusive upper bound.
 
     Partial dates are expanded to their latest instant:
-      "2024"       → datetime(2024, 12, 31, 23, 59, 59)
-      "2024-07"    → datetime(2024, 7, 31, 23, 59, 59)
-      "2024-07-14" → datetime(2024, 7, 14, 23, 59, 59)
+      "2024"                → datetime(2024, 12, 31, 23, 59, 59)
+      "2024-07"             → datetime(2024, 7, 31, 23, 59, 59)
+      "2024-07-14"          → datetime(2024, 7, 14, 23, 59, 59)
+    A time component (``T``-separated) is applied as-is, with missing
+    minute/second fields defaulting to 0 (no end-of-unit expansion):
+      "2024-07-14T20"       → datetime(2024, 7, 14, 20, 0, 0)
+      "2024-07-14T20:00"    → datetime(2024, 7, 14, 20, 0, 0)
+    Any timezone designator is stripped (naive datetime returned).
     """
     if s is None:
         return None
-    parts = s.strip().split("T")[0].split("-")
+    s = s.strip()
     try:
+        # A precise timestamp resolves to the same instant as a lower bound.
+        if "T" in s:
+            return _parse_date_min(s)
+        parts = s.split("-")
         if len(parts) == 1:
             return datetime(int(parts[0]), 12, 31, 23, 59, 59)
         elif len(parts) == 2:
