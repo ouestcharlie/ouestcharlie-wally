@@ -22,6 +22,7 @@ dependencies = [
     "starlette>=0.40",
     "uvicorn>=0.30",
     "ouestcharlie-py-toolkit>=0.13.0",
+    "python-dateutil>=2.8",
 ]
 
 [project.urls]
