@@ -90,7 +90,7 @@ def test_min_timestamp_negative_offset() -> None:
 
 
 def test_min_timestamp_fractional_seconds() -> None:
-    assert _parse_date_min("2024-07-14T18:30:15.123") == datetime(2024, 7, 14, 18, 30, 15)
+    assert _parse_date_min("2024-07-14T18:30:15.123") == datetime(2024, 7, 14, 18, 30, 15, 123000)
 
 
 # --- Errors -----------------------------------------------------------------

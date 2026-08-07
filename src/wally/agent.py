@@ -6,6 +6,7 @@ import calendar
 import logging
 from datetime import datetime
 
+from dateutil.parser import isoparse
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
@@ -422,25 +423,6 @@ def _build_fts_filter(full_text_filter: dict | None) -> FtsFilter | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_time_component(time_str: str) -> tuple[int, int, int]:
-    """Parse an ``HH``, ``HH:MM``, or ``HH:MM:SS`` time component.
-
-    Missing minute/second fields default to 0. Fractional seconds and a
-    trailing timezone designator (``Z`` or ``±HH:MM``) are stripped.
-    """
-    # Strip trailing timezone designator (Z or ±HH:MM) and fractional seconds.
-    # The time portion itself never contains '+' or '-', so the first such
-    # character marks the start of a timezone offset.
-    for sep in ("Z", "+", "-"):
-        time_str = time_str.split(sep)[0]
-    core = time_str.split(".")[0]
-    fields = core.split(":")
-    hour = int(fields[0])
-    minute = int(fields[1]) if len(fields) > 1 else 0
-    second = int(fields[2]) if len(fields) > 2 else 0
-    return hour, minute, second
-
-
 def _parse_date_min(s: str | None) -> datetime | None:
     """Parse an optional date/datetime string as an inclusive lower bound.
 
@@ -457,17 +439,18 @@ def _parse_date_min(s: str | None) -> datetime | None:
     """
     if s is None:
         return None
-    date_part, _, time_part = s.strip().partition("T")
-    parts = date_part.split("-")
+    s = s.strip()
     try:
+        if "T" in s:
+            # Delegate full/partial time, fractional-second and timezone-offset
+            # parsing to isoparse; strip tz so the result is naive (matching how
+            # date_taken is stored). Missing minute/second fields default to 0.
+            return isoparse(s).replace(tzinfo=None)
+        parts = s.split("-")
         year = int(parts[0])
         month = int(parts[1]) if len(parts) > 1 else 1
         day = int(parts[2]) if len(parts) > 2 else 1
-        if time_part:
-            hour, minute, second = _parse_time_component(time_part)
-        else:
-            hour, minute, second = 0, 0, 0
-        return datetime(year, month, day, hour, minute, second)
+        return datetime(year, month, day, 0, 0, 0)
     except (ValueError, IndexError) as exc:
         raise ValueError(f"Invalid date_min {s!r}: {exc}") from exc
 
@@ -487,15 +470,12 @@ def _parse_date_max(s: str | None) -> datetime | None:
     """
     if s is None:
         return None
-    date_part, _, time_part = s.strip().partition("T")
-    parts = date_part.split("-")
+    s = s.strip()
     try:
-        if time_part:
-            year = int(parts[0])
-            month = int(parts[1]) if len(parts) > 1 else 1
-            day = int(parts[2]) if len(parts) > 2 else 1
-            hour, minute, second = _parse_time_component(time_part)
-            return datetime(year, month, day, hour, minute, second)
+        # A precise timestamp resolves to the same instant as a lower bound.
+        if "T" in s:
+            return _parse_date_min(s)
+        parts = s.split("-")
         if len(parts) == 1:
             return datetime(int(parts[0]), 12, 31, 23, 59, 59)
         elif len(parts) == 2:
