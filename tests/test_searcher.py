@@ -11,6 +11,7 @@ from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.schema import (
+    LOWEST_SCHEMA_VERSION,
     SCHEMA_VERSION,
     PhotoEntry,
     RootSummary,
@@ -515,8 +516,8 @@ async def test_missing_root_manifest_raises_error(backend: LocalBackend) -> None
 async def test_schema_version_mismatch_returns_error(
     store: ManifestStore, backend: LocalBackend
 ) -> None:
-    """summary.json with an outdated schemaVersion raises ValueError."""
-    stale = RootSummary(schema_version=SCHEMA_VERSION - 1)
+    """summary.json below the lowest supported schemaVersion raises ValueError."""
+    stale = RootSummary(schema_version=LOWEST_SCHEMA_VERSION - 1)
     await store.create_summary(stale)
 
     with pytest.raises(ValueError, match=("full index")):

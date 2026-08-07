@@ -22,7 +22,12 @@ from ouestcharlie_toolkit.lance_index import (
 )
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.partition_summary import compute_summary
-from ouestcharlie_toolkit.schema import SCHEMA_VERSION, ManifestSummary
+from ouestcharlie_toolkit.schema import (
+    LOWEST_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    ManifestSummary,
+    is_index_schema_compatible,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -199,10 +204,11 @@ async def _verify_index_ready(backend: Backend) -> None:
         _log.error("Failed to read summary.json: %s", exc)
         raise Exception(f"summary.json: {exc}") from exc
 
-    if summary.schema_version != SCHEMA_VERSION:
+    if not is_index_schema_compatible(summary.schema_version):
         msg = (
-            f"Library index schema version {summary.schema_version} does not match "
-            f"expected version {SCHEMA_VERSION}. Run a full index to upgrade."
+            f"Library index schema version {summary.schema_version} is not supported "
+            f"(this software reads versions {LOWEST_SCHEMA_VERSION}–{SCHEMA_VERSION}). "
+            f"Run a full index to upgrade."
         )
         _log.error(msg)
         raise ValueError(msg)
