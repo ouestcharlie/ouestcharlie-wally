@@ -132,7 +132,7 @@ async def test_empty_predicate_summarizes_whole_library(backend: LocalBackend) -
         ],
     )
     summary = await get_summary(backend, SearchPredicate())
-    assert summary.photo_count == 2
+    assert summary.media_count == 2
     assert summary.dateTaken["min"] == datetime(2022, 1, 1)
     assert summary.dateTaken["max"] == datetime(2024, 6, 15)
     assert summary.rating["min"] == 3
@@ -156,14 +156,14 @@ async def test_filtered_predicate_narrows_aggregate(backend: LocalBackend) -> No
         )
     )
     summary = await get_summary(backend, predicate)
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.dateTaken["min"] == datetime(2024, 6, 15)
     assert summary.dateTaken["max"] == datetime(2024, 6, 15)
 
 
 @pytest.mark.asyncio
 async def test_no_match_returns_zero_count(backend: LocalBackend) -> None:
-    """A predicate matching nothing returns photo_count=0 with no range stats."""
+    """A predicate matching nothing returns media_count=0 with no range stats."""
     await _leaf(backend, "", [_entry("a.jpg", "aa", datetime(2022, 1, 1))])
     predicate = SearchPredicate(
         root=FilterGroup(
@@ -171,7 +171,7 @@ async def test_no_match_returns_zero_count(backend: LocalBackend) -> None:
         )
     )
     summary = await get_summary(backend, predicate)
-    assert summary.photo_count == 0
+    assert summary.media_count == 0
     assert summary.dateTaken is None
     assert summary.tags is None
 
@@ -235,7 +235,7 @@ async def test_get_summary_fts_filter_scopes_aggregate(backend: LocalBackend) ->
         SearchPredicate(),
         fts_filter=FtsFilter(query="Canyon", columns=["description"]),
     )
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.rating["min"] == 3
     assert summary.rating["max"] == 3
 
@@ -258,5 +258,62 @@ async def test_get_summary_fts_filter_combined_with_predicate(backend: LocalBack
     summary = await get_summary(
         backend, predicate, fts_filter=FtsFilter(query="Canyon", columns=["description"])
     )
-    assert summary.photo_count == 1
+    assert summary.media_count == 1
     assert summary.tags["counts"] == {"travel": 1}
+
+
+# ---------------------------------------------------------------------------
+# get_summary — video fields (media_type / duration / codec / has_audio)
+# ---------------------------------------------------------------------------
+
+
+def _video_entry(name: str, h: str, **video: object) -> PhotoEntry:
+    return PhotoEntry(
+        filename=name,
+        content_hash=h,
+        searchable={"media_type": "video", **video},
+    )
+
+
+@pytest.mark.asyncio
+async def test_video_stats_end_to_end(backend: LocalBackend) -> None:
+    """get_summary reports media-type facets, duration range, codec facets, audio counts."""
+    await _leaf(
+        backend,
+        "",
+        [
+            # Real photos carry media_type="photo" (set by PhotoEntry.from_sidecar).
+            PhotoEntry(filename="p.jpg", content_hash="p1", searchable={"media_type": "photo"}),
+            _video_entry("v1.mp4", "v1", duration_seconds=15.0, video_codec="h264", has_audio=True),
+            _video_entry(
+                "v2.mov", "v2", duration_seconds=90.0, video_codec="hevc", has_audio=False
+            ),
+        ],
+    )
+    summary = await get_summary(backend, SearchPredicate())
+    assert summary.mediaType["counts"] == {"photo": 1, "video": 2}
+    assert summary.durationSeconds["min"] == 15.0
+    assert summary.durationSeconds["max"] == 90.0
+    assert summary.videoCodec["counts"] == {"h264": 1, "hevc": 1}
+    assert summary.hasAudio == {"type": "bool_counts", "true": 1, "false": 1}
+
+
+@pytest.mark.asyncio
+async def test_has_audio_filter_scopes_summary(backend: LocalBackend) -> None:
+    """Filtering hasAudio=true scopes the aggregate to videos that carry audio."""
+    from wally.searcher import BoolFilter
+
+    await _leaf(
+        backend,
+        "",
+        [
+            _video_entry("v1.mp4", "v1", video_codec="h264", has_audio=True),
+            _video_entry("v2.mov", "v2", video_codec="hevc", has_audio=False),
+        ],
+    )
+    predicate = SearchPredicate(
+        root=FilterGroup(children=[FilterLeaf(field="hasAudio", value=BoolFilter(value=True))])
+    )
+    summary = await get_summary(backend, predicate)
+    assert summary.media_count == 1
+    assert summary.videoCodec["counts"] == {"h264": 1}

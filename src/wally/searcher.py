@@ -74,6 +74,17 @@ class StringFilter:
 
 
 @dataclass(frozen=True)
+class BoolFilter:
+    """Exact true/false match for a BOOL field (e.g. hasAudio).
+
+    A None (unset) entry value is always excluded — the filter matches only
+    rows that explicitly carry the requested boolean.
+    """
+
+    value: bool
+
+
+@dataclass(frozen=True)
 class GpsBoxFilter:
     """Bounding box filter for GPS_BOX fields.
 
@@ -88,7 +99,7 @@ class GpsBoxFilter:
     max_lon: float | None = None
 
 
-FilterValue = RangeFilter | CollectionFilter | StringFilter | GpsBoxFilter
+FilterValue = RangeFilter | CollectionFilter | StringFilter | BoolFilter | GpsBoxFilter
 
 
 # ---------------------------------------------------------------------------
@@ -336,7 +347,7 @@ async def get_summary(
                       PHOTO_FIELDS from ouestcharlie_toolkit.fields.
 
     Returns:
-        ManifestSummary with photo_count, per-field min/max/missing stats,
+        ManifestSummary with media_count, per-field min/max/missing stats,
         and (when any photos have tags) a ``tags`` stat of
         ``{"type": "tag_facets", "counts": {tag: count, ...}}``.
     """
@@ -395,6 +406,10 @@ def _build_leaf(leaf: FilterLeaf, field_config: list[FieldDef]) -> list[str]:
         if fv.mode == "exact":
             return [f"lower({col}) = '{escaped}'"]
         return [f"lower({col}) LIKE '%{escaped}%'"]
+
+    if isinstance(fv, BoolFilter) and fdef.type is FieldType.BOOL:
+        # Explicit = TRUE/FALSE excludes NULL rows (e.g. photos have no has_audio).
+        return [f"{fdef.entry_attr} = {'TRUE' if fv.value else 'FALSE'}"]
 
     if fdef.type is FieldType.TEXT:
         _log.warning("Attempt to filter on a full text field '%s', skipped", fdef.entry_attr)

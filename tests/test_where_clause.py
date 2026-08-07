@@ -333,3 +333,33 @@ def test_single_child_group_no_extra_parens():
 
 def test_empty_group_returns_none():
     assert _group(FilterGroup()) is None
+
+
+# ---------------------------------------------------------------------------
+# Video fields — BOOL (hasAudio), FLOAT_RANGE (durationSeconds), mediaType
+# ---------------------------------------------------------------------------
+
+
+def test_has_audio_true_clause():
+    from wally.searcher import BoolFilter
+
+    result = _clause({"hasAudio": BoolFilter(value=True)})
+    assert result == "has_audio = TRUE"
+
+
+def test_has_audio_false_clause():
+    from wally.searcher import BoolFilter
+
+    result = _clause({"hasAudio": BoolFilter(value=False)})
+    assert result == "has_audio = FALSE"
+
+
+def test_media_type_exact_clause():
+    result = _clause({"mediaType": StringFilter(value="video", mode="exact")})
+    assert result == "lower(media_type) = 'video'"
+
+
+def test_duration_float_range_clause():
+    result = _clause({"durationSeconds": RangeFilter(lo=30, hi=120)})
+    assert "duration_seconds >= 30" in result
+    assert "duration_seconds <= 120" in result

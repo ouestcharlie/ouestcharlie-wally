@@ -15,6 +15,7 @@ from ouestcharlie_toolkit.schema import _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
 
 from .searcher import (
+    BoolFilter,
     CollectionFilter,
     FilterGroup,
     FilterLeaf,
@@ -196,10 +197,12 @@ class WallyAgent(AgentBase):
         # __doc__ immediately to build the tool description.
         _get_summary_tool.__doc__ = f"""Compute aggregate statistics for photos matching a filter.
 
-            Returns count, per-field ranges (date, rating, width/height, GPS
-            bounding box), and tag facets. An empty ``filters`` summarizes
-            the whole library. Scope it to a query using the filter, optionally
-            combined with ``full_text_filter`` — same semantics as ``search_photos``.
+            Returns count, per-field ranges (date, rating, width/height,
+            duration, GPS bounding box), categorical facets (media type, video
+            codec, tags), and boolean counts (has-audio). An empty ``filters``
+            summarizes the whole library. Scope it to a query using the filter,
+            optionally combined with ``full_text_filter`` — same semantics as
+            ``search_photos``.
 
             Use ``list_search_fields`` to discover all available fields and
             their expected filter formats.
@@ -208,12 +211,17 @@ class WallyAgent(AgentBase):
                 {_FILTER_SYNTAX_DOC}
 
             Returns:
-                ``photoCount`` — number of matching photos.
+                ``mediaCount`` — number of matching items.
                 Per-field range stats (``dateTaken``, ``rating``, ``width``,
-                ``height``, ``gps``), each present only if at least one matching
-                photo has a value for that field.
-                ``tags`` — ``{{"type": "tag_facets", "counts": {{tag: count}}}}``
-                over the matching set, present only if any matching photo has tags.
+                ``height``, ``durationSeconds``, ``gps``), each present only if at
+                least one matching item has a value for that field. Ranges carry
+                ``{{"type": "date_range"|"int_range"|"float_range", "min", "max"}}``.
+                Categorical facets (``mediaType``, ``videoCodec``, ``tags``) —
+                ``{{"type": "string_facets"|"tag_facets", "counts": {{value: count}}}}``.
+                Boolean counts (``hasAudio``) —
+                ``{{"type": "bool_counts", "true": N, "false": M}}``.
+                Each stat is present only when the matching set has values for it —
+                e.g. a photo-only result carries no ``videoCodec``/``durationSeconds``.
             """
         mcp.tool(name="get_summary")(_get_summary_tool)
 
@@ -320,6 +328,19 @@ def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLea
     Groups are parsed recursively. i.e. "all" or "any" groups can contain other groups
 
     """
+    # Guard against non-conformant input: a common client mistake is passing the
+    # whole filter (or a nested value) as a JSON-encoded *string* rather than a JSON
+    # object, e.g. filters='{"tags": "Alpinism"}'. Detect it explicitly rather than
+    # letting `"all" in raw` run a substring check on a string and silently misbehave.
+    if isinstance(raw, str):
+        raise ValueError(
+            f"filter must be a JSON object, not a string. Got {raw!r}. "
+            'Pass filters as an object such as {"tags": ["Alpinism"]} — '
+            "do not JSON-encode it into a string."
+        )
+    if not isinstance(raw, dict):
+        raise ValueError(f"filter must be a JSON object, got {type(raw).__name__}: {raw!r}.")
+
     known = {fdef.name: fdef for fdef in field_config}
 
     if "all" in raw or "any" in raw:
@@ -370,14 +391,41 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
         return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
 
     if fdef.type == FieldType.STRING_COLLECTION:
-        return CollectionFilter(values=tuple(raw)) if isinstance(raw, list) and raw else None
+        if raw is None or raw == []:
+            return None
+        if not isinstance(raw, list):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects a list of strings, "
+                f"got {type(raw).__name__}: {raw!r}. "
+                f'Use {{"{fdef.name}": ["value1", "value2"]}}.'
+            )
+        return CollectionFilter(values=tuple(raw))
 
     if fdef.type == FieldType.STRING_MATCH:
-        if isinstance(raw, str) and raw:
-            return StringFilter(value=raw)
-        if isinstance(raw, dict) and isinstance(raw.get("value"), str) and raw["value"]:
-            return StringFilter(value=raw["value"], mode=raw.get("mode", "contains"))
-        return None
+        if isinstance(raw, str):
+            return StringFilter(value=raw) if raw else None
+        if isinstance(raw, dict):
+            val = raw.get("value")
+            if val is None:
+                return None
+            if not isinstance(val, str):
+                raise ValueError(
+                    f"Filter '{fdef.name}'.value must be a string, "
+                    f"got {type(val).__name__}: {val!r}."
+                )
+            return StringFilter(value=val, mode=raw.get("mode", "contains")) if val else None
+        raise ValueError(
+            f'Filter \'{fdef.name}\' expects a string or {{"value": ..., "mode": ...}}, '
+            f"got {type(raw).__name__}: {raw!r}."
+        )
+
+    if fdef.type == FieldType.BOOL:
+        if isinstance(raw, bool):
+            return BoolFilter(value=raw)
+        raise ValueError(
+            f"Filter '{fdef.name}' expects a boolean (true/false), "
+            f"got {type(raw).__name__}: {raw!r}."
+        )
 
     if fdef.type == FieldType.GPS_BOX:
         if isinstance(raw, dict) and any(
