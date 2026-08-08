@@ -9,7 +9,7 @@ from datetime import datetime
 from dateutil.parser import isoparse
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType, is_sortable
 from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
@@ -59,13 +59,16 @@ _FIELD_FORMAT: dict[FieldType, str] = {
 
 # Shared filter-syntax documentation, embedded in both search_photos and
 # get_summary's docstrings so the `all`/`any`/leaf syntax is documented once.
+# Kept textually identical to Woof's copy of the same constant so the two MCP
+# layers present the same filter/full-text vocabulary. Sort documentation lives
+# in _SORT_SYNTAX_DOC (search_photos only) — get_summary has no sort argument.
 _FILTER_SYNTAX_DOC = """\
 filters: Filter expression. Three forms are accepted:
 
     **Single field** — one ``{"fieldName": value}`` dict::
 
-        # All photos under the 2024/ directory tree
-        {"directory": {"value": "2024", "mode": "startswith"}}
+        # media captured during an activity — full timestamps on both bounds
+        {"dateTaken": {"min": "2026-07-15T07:46:41", "max": "2026-07-15T09:37:05"}}
 
     **``{"all": [...]}``** — AND group (all must match)::
 
@@ -88,6 +91,10 @@ filters: Filter expression. Three forms are accepted:
             {"dateTaken": {"min": "2024", "max": "2024"}},
             {"any": [{"make": "nikon"}, {"make": "canon"}]}
         ]}
+
+    Tags are cumulative (AND relationship):
+        # everything tagged Famille AND Vacances
+        {"tags": ["Famille", "Vacances"]}
 full_text_filter: Full-text search over one or more TEXT-typed
     fields. Schema::
 
@@ -98,6 +105,15 @@ full_text_filter: Full-text search over one or more TEXT-typed
     fields (see ``list_search_fields`` → ``full_text_search.fields``).
     Results are relevance-ranked and each match includes ``_score``.
     Compatible with ``filters`` (SQL predicates applied on top of FTS)."""
+
+# Sort documentation for search_photos only. Kept textually identical to Woof's
+# copy. Not part of _FILTER_SYNTAX_DOC because get_summary shares that block and
+# accepts no sort argument.
+_SORT_SYNTAX_DOC = """\
+sort_by: Field name to sort results by — one of the ``list_search_fields``
+    names marked ``sortable`` (e.g. ``dateTaken``, ``rating``). Defaults to
+    ``dateTaken``. Unknown or non-sortable names are rejected.
+sort_order: ``asc`` or ``desc`` (default ``desc``)."""
 
 
 class WallyAgent(AgentBase):
@@ -130,20 +146,23 @@ class WallyAgent(AgentBase):
 
             Returns a ``fields`` list of descriptors. Use the field names and formats
             described here when constructing the ``filters`` argument for
-            ``search_photos``.
+            ``search_photos``. The same ``name`` values are used as ``sort_by`` keys —
+            only fields marked ``sortable`` may be passed to ``sort_by``.
 
             Returns:
                 ``fields`` — list of field descriptors, each with:
-                    ``name`` — field name to use as key in ``filters``.
+                    ``name`` — field name to use as key in ``filters`` and as ``sort_by``.
                     ``type`` — semantic type (DATE_RANGE, INT_RANGE, STRING_COLLECTION,
                         STRING_MATCH, GPS_BOX, DESCRIPTIVE).
                     ``filterFormat`` — description of the expected value format.
+                    ``sortable`` — True if this field can be used as a ``sort_by`` key.
             """
             sql_fields = [
                 {
                     "name": fdef.name,
                     "type": fdef.type.name,
                     "filterFormat": _FIELD_FORMAT[fdef.type],
+                    "sortable": is_sortable(fdef),
                 }
                 for fdef in PHOTO_FIELDS
                 if fdef.type is not FieldType.TEXT
@@ -232,12 +251,18 @@ class WallyAgent(AgentBase):
             ctx: Context,
             filters: dict | None = None,
             full_text_filter: dict | None = None,
-            sort_by: str = "date_taken",
+            sort_by: str = "dateTaken",
             sort_order: str = "desc",
             page: int = 0,
         ) -> dict:
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+
+            try:
+                sort_column = _resolve_sort_column(sort_by, PHOTO_FIELDS)
+                sort_order = _validate_sort_order(sort_order)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
 
@@ -271,7 +296,7 @@ class WallyAgent(AgentBase):
                     predicate=predicate,
                     fts_filter=fts,
                     on_progress=_on_progress,
-                    sort_by=sort_by,
+                    sort_by=sort_column,
                     sort_order=sort_order,
                     page=page,
                     lance_index_path=self.lance_index_path_override,
@@ -302,10 +327,15 @@ class WallyAgent(AgentBase):
 
             Args:
                 {_FILTER_SYNTAX_DOC}
+                {_SORT_SYNTAX_DOC}
+                page: 0-indexed page number (default 0).
 
             Returns:
                 ``matches`` — list of matching photo records.
                 ``totalCount`` — total matches across all pages.
+                ``page`` — 0-indexed page returned.
+                ``pageSize`` — number of records per page.
+                ``hasMore`` — True if further pages remain.
                 ``errors`` — count of read failures.
                 ``errorDetails`` — per-failure error messages.
 
@@ -318,6 +348,37 @@ class WallyAgent(AgentBase):
 # ---------------------------------------------------------------------------
 # Filter validation
 # ---------------------------------------------------------------------------
+
+
+def _resolve_sort_column(name: str, field_config: list) -> str:
+    """Map a ``sort_by`` field name to its LanceDB column, validating it.
+
+    ``sort_by`` uses the same field names as ``list_search_fields`` / ``filters``.
+    Unknown or non-sortable names raise ``ValueError`` rather than silently
+    falling back to an arbitrary order.
+    """
+    for fdef in field_config:
+        if fdef.name == name and is_sortable(fdef):
+            return fdef.entry_attr
+    raise ValueError(
+        f"Unknown or unsortable sort field: '{name}'. "
+        "Call list_search_fields to discover sortable fields (those with sortable=true)."
+    )
+
+
+_VALID_SORT_ORDERS = frozenset({"asc", "desc"})
+
+
+def _validate_sort_order(order: str) -> str:
+    """Validate ``sort_order``, returning it unchanged when valid.
+
+    The searcher maps anything that is not exactly ``"desc"`` to ascending order,
+    so a typo (e.g. ``"descending"``) would silently sort the wrong way. Reject
+    unknown values instead, mirroring the ``sort_by`` contract.
+    """
+    if order not in _VALID_SORT_ORDERS:
+        raise ValueError(f"Invalid sort_order: '{order}'. Expected 'asc' or 'desc'.")
+    return order
 
 
 def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:
@@ -381,17 +442,45 @@ def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLea
     return FilterLeaf(field=key, value=fv)
 
 
+_STRING_MATCH_MODES = ("contains", "startswith", "exact")
+_GPS_BOX_KEYS = ("minLat", "maxLat", "minLon", "maxLon")
+
+
+def _reject_unknown_subkeys(fdef, raw: dict, allowed: tuple[str, ...]) -> None:  # type: ignore[no-untyped-def]
+    """Raise ValueError if a dict-valued filter carries keys outside ``allowed``.
+
+    Without this, a misspelled sub-key (e.g. ``from``/``to`` instead of
+    ``min``/``max``) is silently dropped along with the whole filter leaf, so the
+    query matches everything — the caller gets a plausible-looking result with no
+    indication the filter was ignored.
+    """
+    unknown = [k for k in raw if k not in allowed]
+    if unknown:
+        raise ValueError(
+            f"Filter '{fdef.name}' has unknown key(s): {unknown}. Allowed key(s): {list(allowed)}."
+        )
+
+
 def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
     """Parse a single raw filter value according to the field's FieldType."""
-    if fdef.type == FieldType.DATE_RANGE:
-        lo = _parse_date_min(raw.get("min")) if isinstance(raw, dict) else None
-        hi = _parse_date_max(raw.get("max")) if isinstance(raw, dict) else None
-        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
-
-    if fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
-        lo = raw.get("min") if isinstance(raw, dict) else None
-        hi = raw.get("max") if isinstance(raw, dict) else None
-        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
+    if fdef.type in (FieldType.DATE_RANGE, FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects an object with 'min' and/or 'max', "
+                f"got {type(raw).__name__}: {raw!r}."
+            )
+        _reject_unknown_subkeys(fdef, raw, ("min", "max"))
+        if fdef.type == FieldType.DATE_RANGE:
+            lo = _parse_date_min(raw.get("min"))
+            hi = _parse_date_max(raw.get("max"))
+        else:
+            lo = raw.get("min")
+            hi = raw.get("max")
+        if lo is None and hi is None:
+            raise ValueError(
+                f"Filter '{fdef.name}' expects at least one of 'min'/'max' with a value."
+            )
+        return RangeFilter(lo=lo, hi=hi)
 
     if fdef.type == FieldType.STRING_COLLECTION:
         if raw is None or raw == []:
@@ -408,15 +497,24 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
         if isinstance(raw, str):
             return StringFilter(value=raw) if raw else None
         if isinstance(raw, dict):
+            _reject_unknown_subkeys(fdef, raw, ("value", "mode"))
             val = raw.get("value")
             if val is None:
-                return None
+                raise ValueError(
+                    f"Filter '{fdef.name}' expects a 'value' key with a string, or a bare string."
+                )
             if not isinstance(val, str):
                 raise ValueError(
                     f"Filter '{fdef.name}'.value must be a string, "
                     f"got {type(val).__name__}: {val!r}."
                 )
-            return StringFilter(value=val, mode=raw.get("mode", "contains")) if val else None
+            mode = raw.get("mode", "contains")
+            if mode not in _STRING_MATCH_MODES:
+                raise ValueError(
+                    f"Filter '{fdef.name}'.mode must be one of {list(_STRING_MATCH_MODES)}, "
+                    f"got {mode!r}."
+                )
+            return StringFilter(value=val, mode=mode) if val else None
         raise ValueError(
             f'Filter \'{fdef.name}\' expects a string or {{"value": ..., "mode": ...}}, '
             f"got {type(raw).__name__}: {raw!r}."
@@ -431,16 +529,22 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
         )
 
     if fdef.type == FieldType.GPS_BOX:
-        if isinstance(raw, dict) and any(
-            raw.get(k) is not None for k in ("minLat", "maxLat", "minLon", "maxLon")
-        ):
-            return GpsBoxFilter(
-                min_lat=raw.get("minLat"),
-                max_lat=raw.get("maxLat"),
-                min_lon=raw.get("minLon"),
-                max_lon=raw.get("maxLon"),
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects an object with "
+                f"{list(_GPS_BOX_KEYS)}, got {type(raw).__name__}: {raw!r}."
             )
-        return None
+        _reject_unknown_subkeys(fdef, raw, _GPS_BOX_KEYS)
+        if all(raw.get(k) is None for k in _GPS_BOX_KEYS):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects at least one of {list(_GPS_BOX_KEYS)} with a value."
+            )
+        return GpsBoxFilter(
+            min_lat=raw.get("minLat"),
+            max_lat=raw.get("maxLat"),
+            min_lon=raw.get("minLon"),
+            max_lon=raw.get("maxLon"),
+        )
 
     # DESCRIPTIVE and TEXT: not yet implemented — silently ignored
     return None

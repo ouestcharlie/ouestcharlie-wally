@@ -40,8 +40,8 @@ tests/
 | `filters` | `object` | — | Dict mapping field names to filter values. Use `list_search_fields` to discover available fields and their formats. Supported filter types: date range, int/float range, string collection (AND), string substring, GPS bounding box. |
 | `full_text_filter` | `object` | — | Full-text search over one or more `TEXT`-typed fields. Shape: `{"query": "Canyon", "columns": ["description"]}`. `query` is a single string applied across all listed columns; `columns` must be `entry_attr` names of `FieldType.TEXT` fields (see `list_search_fields → full_text_search.fields`). Results are relevance-ranked and each match includes `score`. Compatible with `filters`. |
 | `partitions` | `string[]` | — | Explicit partition paths to search. When non-empty, an unfiltered scan of those partitions is allowed. |
-| `sort_by` | `string` | `"date_taken"` | Column to sort by (ignored when `full_text_filter` is set — results are relevance-ranked). |
-| `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"`. |
+| `sort_by` | `string` | `"dateTaken"` | `list_search_fields` name (marked `sortable`) to sort by; validated and mapped to its LanceDB column. Unknown or non-sortable names are rejected. Ignored when `full_text_filter` is set — results are relevance-ranked. |
+| `sort_order` | `string` | `"desc"` | `"asc"` or `"desc"`. Validated — any other value is rejected rather than silently defaulting to ascending (the searcher maps anything ≠ `"desc"` to ascending). |
 | `page` | `int` | `0` | 0-indexed page number; passed directly to `LanceIndex.search_where`. |
 
 **Output**:
