@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 
-from wally.agent import _parse_filter_node
+from wally.agent import _FIELD_FORMAT, _parse_filter_node
 from wally.searcher import FilterGroup, FilterLeaf
 
 
@@ -128,3 +128,13 @@ def test_tags_given_string_instead_of_list_raises() -> None:
 def test_string_match_given_non_string_value_raises() -> None:
     with pytest.raises(ValueError, match="must be a string"):
         _parse({"make": {"value": 123}})
+
+
+def test_field_format_covers_every_field_type() -> None:
+    """Every FieldType must have a filter-format description.
+
+    list_search_fields looks up _FIELD_FORMAT[fdef.type] for each field, so a
+    new FieldType member without an entry makes the tool raise KeyError for the
+    entire call. This fails loudly here instead.
+    """
+    assert set(_FIELD_FORMAT) == set(FieldType)
