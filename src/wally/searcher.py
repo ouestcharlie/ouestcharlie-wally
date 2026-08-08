@@ -22,7 +22,12 @@ from ouestcharlie_toolkit.lance_index import (
 )
 from ouestcharlie_toolkit.manifest import ManifestStore
 from ouestcharlie_toolkit.partition_summary import compute_summary
-from ouestcharlie_toolkit.schema import SCHEMA_VERSION, ManifestSummary
+from ouestcharlie_toolkit.schema import (
+    LOWEST_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    ManifestSummary,
+    is_index_schema_compatible,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -69,6 +74,17 @@ class StringFilter:
 
 
 @dataclass(frozen=True)
+class BoolFilter:
+    """Exact true/false match for a BOOL field (e.g. hasAudio).
+
+    A None (unset) entry value is always excluded — the filter matches only
+    rows that explicitly carry the requested boolean.
+    """
+
+    value: bool
+
+
+@dataclass(frozen=True)
 class GpsBoxFilter:
     """Bounding box filter for GPS_BOX fields.
 
@@ -83,7 +99,7 @@ class GpsBoxFilter:
     max_lon: float | None = None
 
 
-FilterValue = RangeFilter | CollectionFilter | StringFilter | GpsBoxFilter
+FilterValue = RangeFilter | CollectionFilter | StringFilter | BoolFilter | GpsBoxFilter
 
 
 # ---------------------------------------------------------------------------
@@ -199,10 +215,11 @@ async def _verify_index_ready(backend: Backend) -> None:
         _log.error("Failed to read summary.json: %s", exc)
         raise Exception(f"summary.json: {exc}") from exc
 
-    if summary.schema_version != SCHEMA_VERSION:
+    if not is_index_schema_compatible(summary.schema_version):
         msg = (
-            f"Library index schema version {summary.schema_version} does not match "
-            f"expected version {SCHEMA_VERSION}. Run a full index to upgrade."
+            f"Library index schema version {summary.schema_version} is not supported "
+            f"(this software reads versions {LOWEST_SCHEMA_VERSION}–{SCHEMA_VERSION}). "
+            f"Run a full index to upgrade."
         )
         _log.error(msg)
         raise ValueError(msg)
@@ -330,7 +347,7 @@ async def get_summary(
                       PHOTO_FIELDS from ouestcharlie_toolkit.fields.
 
     Returns:
-        ManifestSummary with photo_count, per-field min/max/missing stats,
+        ManifestSummary with media_count, per-field min/max/missing stats,
         and (when any photos have tags) a ``tags`` stat of
         ``{"type": "tag_facets", "counts": {tag: count, ...}}``.
     """
@@ -389,6 +406,10 @@ def _build_leaf(leaf: FilterLeaf, field_config: list[FieldDef]) -> list[str]:
         if fv.mode == "exact":
             return [f"lower({col}) = '{escaped}'"]
         return [f"lower({col}) LIKE '%{escaped}%'"]
+
+    if isinstance(fv, BoolFilter) and fdef.type is FieldType.BOOL:
+        # Explicit = TRUE/FALSE excludes NULL rows (e.g. photos have no has_audio).
+        return [f"{fdef.entry_attr} = {'TRUE' if fv.value else 'FALSE'}"]
 
     if fdef.type is FieldType.TEXT:
         _log.warning("Attempt to filter on a full text field '%s', skipped", fdef.entry_attr)

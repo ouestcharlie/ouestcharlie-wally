@@ -79,3 +79,52 @@ def test_nested_group_parses_correctly() -> None:
 def test_unknown_field_inside_group_raises() -> None:
     with pytest.raises(ValueError, match="Unknown filter field"):
         _parse({"any": [{"mood": "happy"}, {"make": "nikon"}]})
+
+
+# ---------------------------------------------------------------------------
+# Video field parsing — hasAudio (BOOL), and non-conformant input detection
+# ---------------------------------------------------------------------------
+
+
+def test_has_audio_bool_true_parsed() -> None:
+    from wally.searcher import BoolFilter
+
+    leaf = _parse({"hasAudio": True})
+    assert isinstance(leaf, FilterLeaf)
+    assert leaf.value == BoolFilter(value=True)
+
+
+def test_has_audio_bool_false_parsed() -> None:
+    from wally.searcher import BoolFilter
+
+    leaf = _parse({"hasAudio": False})
+    assert leaf.value == BoolFilter(value=False)
+
+
+def test_has_audio_non_bool_raises() -> None:
+    with pytest.raises(ValueError, match="boolean"):
+        _parse({"hasAudio": "yes"})
+
+
+def test_media_type_string_filter_parsed() -> None:
+    from wally.searcher import StringFilter
+
+    leaf = _parse({"mediaType": "video"})
+    assert leaf.value == StringFilter(value="video")
+
+
+def test_filters_as_json_string_raises() -> None:
+    """A JSON-encoded string instead of an object is detected, not misparsed."""
+    with pytest.raises(ValueError, match="JSON object, not a string"):
+        _parse('{"tags": "Alpinism"}')
+
+
+def test_tags_given_string_instead_of_list_raises() -> None:
+    """tags expects a list; a bare string is a schema violation, not silently dropped."""
+    with pytest.raises(ValueError, match="list of strings"):
+        _parse({"tags": "Alpinism"})
+
+
+def test_string_match_given_non_string_value_raises() -> None:
+    with pytest.raises(ValueError, match="must be a string"):
+        _parse({"make": {"value": 123}})
