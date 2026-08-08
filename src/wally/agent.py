@@ -59,13 +59,16 @@ _FIELD_FORMAT: dict[FieldType, str] = {
 
 # Shared filter-syntax documentation, embedded in both search_photos and
 # get_summary's docstrings so the `all`/`any`/leaf syntax is documented once.
+# Kept textually identical to Woof's copy of the same constant so the two MCP
+# layers present the same filter/full-text vocabulary. Sort documentation lives
+# in _SORT_SYNTAX_DOC (search_photos only) — get_summary has no sort argument.
 _FILTER_SYNTAX_DOC = """\
 filters: Filter expression. Three forms are accepted:
 
     **Single field** — one ``{"fieldName": value}`` dict::
 
-        # All photos under the 2024/ directory tree
-        {"directory": {"value": "2024", "mode": "startswith"}}
+        # media captured during an activity — full timestamps on both bounds
+        {"dateTaken": {"min": "2026-07-15T07:46:41", "max": "2026-07-15T09:37:05"}}
 
     **``{"all": [...]}``** — AND group (all must match)::
 
@@ -88,6 +91,10 @@ filters: Filter expression. Three forms are accepted:
             {"dateTaken": {"min": "2024", "max": "2024"}},
             {"any": [{"make": "nikon"}, {"make": "canon"}]}
         ]}
+
+    Tags are cumulative (AND relationship):
+        # everything tagged Famille AND Vacances
+        {"tags": ["Famille", "Vacances"]}
 full_text_filter: Full-text search over one or more TEXT-typed
     fields. Schema::
 
@@ -98,6 +105,15 @@ full_text_filter: Full-text search over one or more TEXT-typed
     fields (see ``list_search_fields`` → ``full_text_search.fields``).
     Results are relevance-ranked and each match includes ``_score``.
     Compatible with ``filters`` (SQL predicates applied on top of FTS)."""
+
+# Sort documentation for search_photos only. Kept textually identical to Woof's
+# copy. Not part of _FILTER_SYNTAX_DOC because get_summary shares that block and
+# accepts no sort argument.
+_SORT_SYNTAX_DOC = """\
+sort_by: Field name to sort results by — one of the ``list_search_fields``
+    names marked ``sortable`` (e.g. ``dateTaken``, ``rating``). Defaults to
+    ``dateTaken``. Unknown or non-sortable names are rejected.
+sort_order: ``asc`` or ``desc`` (default ``desc``)."""
 
 
 class WallyAgent(AgentBase):
@@ -310,10 +326,15 @@ class WallyAgent(AgentBase):
 
             Args:
                 {_FILTER_SYNTAX_DOC}
+                {_SORT_SYNTAX_DOC}
+                page: 0-indexed page number (default 0).
 
             Returns:
                 ``matches`` — list of matching photo records.
                 ``totalCount`` — total matches across all pages.
+                ``page`` — 0-indexed page returned.
+                ``pageSize`` — number of records per page.
+                ``hasMore`` — True if further pages remain.
                 ``errors`` — count of read failures.
                 ``errorDetails`` — per-failure error messages.
 
