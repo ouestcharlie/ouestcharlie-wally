@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 
-from wally.agent import _FIELD_FORMAT, _parse_filter_node
+from wally.agent import _FIELD_FORMAT, _parse_filter_node, _resolve_sort_column
 from wally.searcher import FilterGroup, FilterLeaf
 
 
@@ -128,6 +128,47 @@ def test_tags_given_string_instead_of_list_raises() -> None:
 def test_string_match_given_non_string_value_raises() -> None:
     with pytest.raises(ValueError, match="must be a string"):
         _parse({"make": {"value": 123}})
+
+
+# ---------------------------------------------------------------------------
+# sort_by validation — accepts list_search_fields names, rejects the rest
+# ---------------------------------------------------------------------------
+
+
+def _resolve(name):
+    return _resolve_sort_column(name, PHOTO_FIELDS)
+
+
+def test_sort_by_default_resolves_to_date_column() -> None:
+    """The tool default (dateTaken) maps to the date_taken LanceDB column."""
+    assert _resolve("dateTaken") == "date_taken"
+
+
+def test_sort_by_camelcase_name_resolves_to_entry_attr() -> None:
+    assert _resolve("rating") == "rating"
+    assert _resolve("isoSpeed") == "iso_speed"
+
+
+def test_sort_by_unknown_field_raises() -> None:
+    with pytest.raises(ValueError, match="Unknown or unsortable sort field"):
+        _resolve("not_a_real_field_xyz")
+
+
+def test_sort_by_snake_case_column_rejected() -> None:
+    """The old snake_case column name is not a valid sort_by key anymore."""
+    with pytest.raises(ValueError, match="Unknown or unsortable sort field"):
+        _resolve("date_taken")
+
+
+@pytest.mark.parametrize("name", ["tags", "gps", "description"])
+def test_sort_by_non_sortable_field_raises(name: str) -> None:
+    with pytest.raises(ValueError, match="Unknown or unsortable sort field"):
+        _resolve(name)
+
+
+def test_sort_error_message_mentions_list_tool() -> None:
+    with pytest.raises(ValueError, match="list_search_fields"):
+        _resolve("mood")
 
 
 def test_field_format_covers_every_field_type() -> None:

@@ -9,7 +9,7 @@ from datetime import datetime
 from dateutil.parser import isoparse
 from mcp.server.fastmcp import Context
 from mcp.server.fastmcp.exceptions import ToolError
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType, is_sortable
 from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
@@ -130,20 +130,23 @@ class WallyAgent(AgentBase):
 
             Returns a ``fields`` list of descriptors. Use the field names and formats
             described here when constructing the ``filters`` argument for
-            ``search_photos``.
+            ``search_photos``. The same ``name`` values are used as ``sort_by`` keys —
+            only fields marked ``sortable`` may be passed to ``sort_by``.
 
             Returns:
                 ``fields`` — list of field descriptors, each with:
-                    ``name`` — field name to use as key in ``filters``.
+                    ``name`` — field name to use as key in ``filters`` and as ``sort_by``.
                     ``type`` — semantic type (DATE_RANGE, INT_RANGE, STRING_COLLECTION,
                         STRING_MATCH, GPS_BOX, DESCRIPTIVE).
                     ``filterFormat`` — description of the expected value format.
+                    ``sortable`` — True if this field can be used as a ``sort_by`` key.
             """
             sql_fields = [
                 {
                     "name": fdef.name,
                     "type": fdef.type.name,
                     "filterFormat": _FIELD_FORMAT[fdef.type],
+                    "sortable": is_sortable(fdef),
                 }
                 for fdef in PHOTO_FIELDS
                 if fdef.type is not FieldType.TEXT
@@ -232,12 +235,17 @@ class WallyAgent(AgentBase):
             ctx: Context,
             filters: dict | None = None,
             full_text_filter: dict | None = None,
-            sort_by: str = "date_taken",
+            sort_by: str = "dateTaken",
             sort_order: str = "desc",
             page: int = 0,
         ) -> dict:
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
+            except ValueError as exc:
+                raise ToolError(str(exc)) from exc
+
+            try:
+                sort_column = _resolve_sort_column(sort_by, PHOTO_FIELDS)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
 
@@ -271,7 +279,7 @@ class WallyAgent(AgentBase):
                     predicate=predicate,
                     fts_filter=fts,
                     on_progress=_on_progress,
-                    sort_by=sort_by,
+                    sort_by=sort_column,
                     sort_order=sort_order,
                     page=page,
                     lance_index_path=self.lance_index_path_override,
@@ -318,6 +326,22 @@ class WallyAgent(AgentBase):
 # ---------------------------------------------------------------------------
 # Filter validation
 # ---------------------------------------------------------------------------
+
+
+def _resolve_sort_column(name: str, field_config: list) -> str:
+    """Map a ``sort_by`` field name to its LanceDB column, validating it.
+
+    ``sort_by`` uses the same field names as ``list_search_fields`` / ``filters``.
+    Unknown or non-sortable names raise ``ValueError`` rather than silently
+    falling back to an arbitrary order.
+    """
+    for fdef in field_config:
+        if fdef.name == name and is_sortable(fdef):
+            return fdef.entry_attr
+    raise ValueError(
+        f"Unknown or unsortable sort field: '{name}'. "
+        "Call list_search_fields to discover sortable fields (those with sortable=true)."
+    )
 
 
 def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:
