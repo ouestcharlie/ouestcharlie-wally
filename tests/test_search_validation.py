@@ -171,6 +171,68 @@ def test_sort_error_message_mentions_list_tool() -> None:
         _resolve("mood")
 
 
+# ---------------------------------------------------------------------------
+# Filter sub-key validation — misspelled/unknown sub-keys must not be dropped
+# ---------------------------------------------------------------------------
+
+
+def test_date_range_from_to_rejected() -> None:
+    """`from`/`to` instead of `min`/`max` must error, not silently match all."""
+    with pytest.raises(ValueError, match="unknown key"):
+        _parse({"dateTaken": {"from": "2024", "to": "2025"}})
+
+
+def test_date_range_empty_object_rejected() -> None:
+    with pytest.raises(ValueError, match="at least one of 'min'/'max'"):
+        _parse({"dateTaken": {}})
+
+
+def test_date_range_non_dict_rejected() -> None:
+    with pytest.raises(ValueError, match="expects an object"):
+        _parse({"dateTaken": "2024"})
+
+
+def test_date_range_valid_min_only_accepted() -> None:
+    leaf = _parse({"dateTaken": {"min": "2024"}})
+    assert isinstance(leaf, FilterLeaf)
+    assert leaf.field == "dateTaken"
+
+
+def test_int_range_unknown_key_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown key"):
+        _parse({"rating": {"gte": 4}})
+
+
+def test_int_range_empty_object_rejected() -> None:
+    with pytest.raises(ValueError, match="at least one of 'min'/'max'"):
+        _parse({"rating": {}})
+
+
+def test_gps_unknown_key_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown key"):
+        _parse({"gps": {"lat": 48.0, "lon": 2.0}})
+
+
+def test_gps_empty_object_rejected() -> None:
+    with pytest.raises(ValueError, match="at least one of"):
+        _parse({"gps": {}})
+
+
+def test_string_match_unknown_key_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown key"):
+        _parse({"make": {"value": "nikon", "match": "exact"}})
+
+
+def test_string_match_invalid_mode_rejected() -> None:
+    with pytest.raises(ValueError, match="mode must be one of"):
+        _parse({"make": {"value": "nikon", "mode": "startsWith"}})
+
+
+def test_string_match_missing_value_rejected() -> None:
+    with pytest.raises(ValueError, match="'value' key"):
+        _parse({"make": {"mode": "exact"}})
+
+
 def test_field_format_covers_every_field_type() -> None:
     """Every FieldType must have a filter-format description.
 

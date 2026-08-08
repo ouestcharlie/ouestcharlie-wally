@@ -426,17 +426,45 @@ def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLea
     return FilterLeaf(field=key, value=fv)
 
 
+_STRING_MATCH_MODES = ("contains", "startswith", "exact")
+_GPS_BOX_KEYS = ("minLat", "maxLat", "minLon", "maxLon")
+
+
+def _reject_unknown_subkeys(fdef, raw: dict, allowed: tuple[str, ...]) -> None:  # type: ignore[no-untyped-def]
+    """Raise ValueError if a dict-valued filter carries keys outside ``allowed``.
+
+    Without this, a misspelled sub-key (e.g. ``from``/``to`` instead of
+    ``min``/``max``) is silently dropped along with the whole filter leaf, so the
+    query matches everything — the caller gets a plausible-looking result with no
+    indication the filter was ignored.
+    """
+    unknown = [k for k in raw if k not in allowed]
+    if unknown:
+        raise ValueError(
+            f"Filter '{fdef.name}' has unknown key(s): {unknown}. Allowed key(s): {list(allowed)}."
+        )
+
+
 def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
     """Parse a single raw filter value according to the field's FieldType."""
-    if fdef.type == FieldType.DATE_RANGE:
-        lo = _parse_date_min(raw.get("min")) if isinstance(raw, dict) else None
-        hi = _parse_date_max(raw.get("max")) if isinstance(raw, dict) else None
-        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
-
-    if fdef.type in (FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
-        lo = raw.get("min") if isinstance(raw, dict) else None
-        hi = raw.get("max") if isinstance(raw, dict) else None
-        return RangeFilter(lo=lo, hi=hi) if lo is not None or hi is not None else None
+    if fdef.type in (FieldType.DATE_RANGE, FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects an object with 'min' and/or 'max', "
+                f"got {type(raw).__name__}: {raw!r}."
+            )
+        _reject_unknown_subkeys(fdef, raw, ("min", "max"))
+        if fdef.type == FieldType.DATE_RANGE:
+            lo = _parse_date_min(raw.get("min"))
+            hi = _parse_date_max(raw.get("max"))
+        else:
+            lo = raw.get("min")
+            hi = raw.get("max")
+        if lo is None and hi is None:
+            raise ValueError(
+                f"Filter '{fdef.name}' expects at least one of 'min'/'max' with a value."
+            )
+        return RangeFilter(lo=lo, hi=hi)
 
     if fdef.type == FieldType.STRING_COLLECTION:
         if raw is None or raw == []:
@@ -453,15 +481,24 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
         if isinstance(raw, str):
             return StringFilter(value=raw) if raw else None
         if isinstance(raw, dict):
+            _reject_unknown_subkeys(fdef, raw, ("value", "mode"))
             val = raw.get("value")
             if val is None:
-                return None
+                raise ValueError(
+                    f"Filter '{fdef.name}' expects a 'value' key with a string, or a bare string."
+                )
             if not isinstance(val, str):
                 raise ValueError(
                     f"Filter '{fdef.name}'.value must be a string, "
                     f"got {type(val).__name__}: {val!r}."
                 )
-            return StringFilter(value=val, mode=raw.get("mode", "contains")) if val else None
+            mode = raw.get("mode", "contains")
+            if mode not in _STRING_MATCH_MODES:
+                raise ValueError(
+                    f"Filter '{fdef.name}'.mode must be one of {list(_STRING_MATCH_MODES)}, "
+                    f"got {mode!r}."
+                )
+            return StringFilter(value=val, mode=mode) if val else None
         raise ValueError(
             f'Filter \'{fdef.name}\' expects a string or {{"value": ..., "mode": ...}}, '
             f"got {type(raw).__name__}: {raw!r}."
@@ -476,16 +513,22 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
         )
 
     if fdef.type == FieldType.GPS_BOX:
-        if isinstance(raw, dict) and any(
-            raw.get(k) is not None for k in ("minLat", "maxLat", "minLon", "maxLon")
-        ):
-            return GpsBoxFilter(
-                min_lat=raw.get("minLat"),
-                max_lat=raw.get("maxLat"),
-                min_lon=raw.get("minLon"),
-                max_lon=raw.get("maxLon"),
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects an object with "
+                f"{list(_GPS_BOX_KEYS)}, got {type(raw).__name__}: {raw!r}."
             )
-        return None
+        _reject_unknown_subkeys(fdef, raw, _GPS_BOX_KEYS)
+        if all(raw.get(k) is None for k in _GPS_BOX_KEYS):
+            raise ValueError(
+                f"Filter '{fdef.name}' expects at least one of {list(_GPS_BOX_KEYS)} with a value."
+            )
+        return GpsBoxFilter(
+            min_lat=raw.get("minLat"),
+            max_lat=raw.get("maxLat"),
+            min_lon=raw.get("minLon"),
+            max_lon=raw.get("maxLon"),
+        )
 
     # DESCRIPTIVE and TEXT: not yet implemented — silently ignored
     return None
