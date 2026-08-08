@@ -262,6 +262,7 @@ class WallyAgent(AgentBase):
 
             try:
                 sort_column = _resolve_sort_column(sort_by, PHOTO_FIELDS)
+                sort_order = _validate_sort_order(sort_order)
             except ValueError as exc:
                 raise ToolError(str(exc)) from exc
 
@@ -363,6 +364,21 @@ def _resolve_sort_column(name: str, field_config: list) -> str:
         f"Unknown or unsortable sort field: '{name}'. "
         "Call list_search_fields to discover sortable fields (those with sortable=true)."
     )
+
+
+_VALID_SORT_ORDERS = frozenset({"asc", "desc"})
+
+
+def _validate_sort_order(order: str) -> str:
+    """Validate ``sort_order``, returning it unchanged when valid.
+
+    The searcher maps anything that is not exactly ``"desc"`` to ascending order,
+    so a typo (e.g. ``"descending"``) would silently sort the wrong way. Reject
+    unknown values instead, mirroring the ``sort_by`` contract.
+    """
+    if order not in _VALID_SORT_ORDERS:
+        raise ValueError(f"Invalid sort_order: '{order}'. Expected 'asc' or 'desc'.")
+    return order
 
 
 def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:

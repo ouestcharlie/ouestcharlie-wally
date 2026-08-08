@@ -5,7 +5,12 @@ from __future__ import annotations
 import pytest
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
 
-from wally.agent import _FIELD_FORMAT, _parse_filter_node, _resolve_sort_column
+from wally.agent import (
+    _FIELD_FORMAT,
+    _parse_filter_node,
+    _resolve_sort_column,
+    _validate_sort_order,
+)
 from wally.searcher import FilterGroup, FilterLeaf
 
 
@@ -169,6 +174,22 @@ def test_sort_by_non_sortable_field_raises(name: str) -> None:
 def test_sort_error_message_mentions_list_tool() -> None:
     with pytest.raises(ValueError, match="list_search_fields"):
         _resolve("mood")
+
+
+# ---------------------------------------------------------------------------
+# sort_order validation — accepts asc/desc, rejects the rest
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("order", ["asc", "desc"])
+def test_sort_order_valid_passes_through(order: str) -> None:
+    assert _validate_sort_order(order) == order
+
+
+@pytest.mark.parametrize("order", ["descending", "ascending", "DESC", "", "up"])
+def test_sort_order_invalid_raises(order: str) -> None:
+    with pytest.raises(ValueError, match="Invalid sort_order"):
+        _validate_sort_order(order)
 
 
 # ---------------------------------------------------------------------------
