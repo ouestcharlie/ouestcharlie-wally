@@ -30,6 +30,33 @@ from .searcher import (
 
 _log = logging.getLogger(__name__)
 
+# Human-readable filter-format description per field type, surfaced by
+# list_search_fields. Must cover every FieldType member (enforced by test) —
+# a missing entry makes list_search_fields raise KeyError for the whole call.
+_FIELD_FORMAT: dict[FieldType, str] = {
+    FieldType.DATE_RANGE: (
+        'object with optional "min" and/or "max" (ISO 8601 string; '
+        'partial dates supported: "2024", "2024-07", "2024-07-14"; '
+        'time-of-day supported via a "T" component: '
+        '"2024-07-14T18", "2024-07-14T18:30", "2024-07-14T18:30:00")'
+    ),
+    FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
+    FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
+    FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
+    FieldType.STRING_MATCH: (
+        "string (case-insensitive substring match) or "
+        '{"value": "...", "mode": "startswith"|"contains"|"exact"}'
+    ),
+    FieldType.BOOL: "boolean (true/false); photos with no value are excluded",
+    FieldType.TEXT: "full-text search — use full_text_filter, not filters",
+    FieldType.GPS_BOX: (
+        '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
+        "— decimal degrees bounding box; photos outside the box are excluded. "
+        "All bounds optional (open-ended)."
+    ),
+    FieldType.DESCRIPTIVE: "not yet implemented",
+}
+
 # Shared filter-syntax documentation, embedded in both search_photos and
 # get_summary's docstrings so the `all`/`any`/leaf syntax is documented once.
 _FILTER_SYNTAX_DOC = """\
@@ -112,35 +139,11 @@ class WallyAgent(AgentBase):
                         STRING_MATCH, GPS_BOX, DESCRIPTIVE).
                     ``filterFormat`` — description of the expected value format.
             """
-            _FORMAT: dict[FieldType, str] = {
-                FieldType.DATE_RANGE: (
-                    'object with optional "min" and/or "max" (ISO 8601 string; '
-                    'partial dates supported: "2024", "2024-07", "2024-07-14"; '
-                    'time-of-day supported via a "T" component: '
-                    '"2024-07-14T18", "2024-07-14T18:30", "2024-07-14T18:30:00")'
-                ),
-                FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
-                FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
-                FieldType.STRING_COLLECTION: (
-                    "list of strings (AND semantics — all must be present)"
-                ),
-                FieldType.STRING_MATCH: (
-                    "string (case-insensitive substring match) or "
-                    '{"value": "...", "mode": "startswith"|"contains"|"exact"}'
-                ),
-                FieldType.TEXT: "full-text search — use full_text_filter, not filters",
-                FieldType.GPS_BOX: (
-                    '{"minLat": float, "maxLat": float, "minLon": float, "maxLon": float} '
-                    "— decimal degrees bounding box; photos outside the box are excluded. "
-                    "All bounds optional (open-ended)."
-                ),
-                FieldType.DESCRIPTIVE: "not yet implemented",
-            }
             sql_fields = [
                 {
                     "name": fdef.name,
                     "type": fdef.type.name,
-                    "filterFormat": _FORMAT[fdef.type],
+                    "filterFormat": _FIELD_FORMAT[fdef.type],
                 }
                 for fdef in PHOTO_FIELDS
                 if fdef.type is not FieldType.TEXT
