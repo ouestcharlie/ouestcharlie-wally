@@ -7,8 +7,8 @@ import logging
 from datetime import datetime
 
 from dateutil.parser import isoparse
-from mcp.server.fastmcp import Context
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import Context
+from mcp.server.mcpserver.exceptions import ToolError
 from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType, is_sortable
 from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import _summary_to_dict
