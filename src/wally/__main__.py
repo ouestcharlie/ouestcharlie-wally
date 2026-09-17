@@ -23,7 +23,7 @@ import sys
 from ouestcharlie_toolkit import setup_logging
 
 # Set up logging before importing agent code (which may trigger library imports).
-_log_file = setup_logging("wally", log_file_env_var="WALLY_LOG_FILE", level=logging.DEBUG)
+_log_file = setup_logging("wally", log_file_env_var="WALLY_LOG_FILE", level=logging.INFO)
 _log = logging.getLogger(__name__)
 _log.info("Wally starting — log: %s", _log_file)
 
