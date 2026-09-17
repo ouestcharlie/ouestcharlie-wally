@@ -31,7 +31,7 @@ jobs:
       - name: Install package
         working-directory: dist
         shell: bash
-        run: pip install ouestcharlie_wally-*.whl pytest pytest-asyncio
+        run: pip install ouestcharlie_wally-*.whl httpx pytest pytest-asyncio
 
       - name: Run tests
         run: python -m pytest tests/ -v
