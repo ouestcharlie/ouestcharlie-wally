@@ -2,7 +2,7 @@
 
 Wally is the search/consumption agent for OuEstCharlie. It is **stateless and read-only**: Woof launches it as a child process (MCP server over stdio), passes a structured search predicate via `search_photos`, and Wally returns matching photo metadata by traversing the manifest tree. It never reads XMP sidecars or writes anything.
 
-> **More about OuEstCharlie on the [OuEstCharlie Blog](https://ouestcharlie.github.io/ouestcharlie/)**
+> **More about OuEstCharlie on the [OuEstCharlie Blog](https://ouestcharlie.github.io)**
 
 ## Design Documents
 
