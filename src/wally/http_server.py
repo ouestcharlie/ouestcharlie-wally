@@ -24,7 +24,7 @@ import asyncio
 import contextlib
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import unquote
 
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
@@ -62,7 +62,7 @@ class MediaMiddleware:
         self,
         app: Any,
         *,
-        backend_config: dict,
+        backend_config: dict[str, Any],
         backend_name: str,
     ) -> None:
         self._app = app
@@ -260,7 +260,7 @@ class MediaMiddleware:
         range_header = _header_value(scope, b"range")
         span = _parse_range(range_header, file_size) if range_header else None
 
-        if span == "unsatisfiable":
+        if isinstance(span, str):  # "unsatisfiable"
             await send(
                 {
                     "type": "http.response.start",
@@ -329,11 +329,11 @@ def _header_value(scope: Any, name: bytes) -> str | None:
     """Return a request header value (lowercased-name match) from the ASGI scope."""
     for key, value in scope.get("headers", []):
         if key == name:
-            return value.decode("latin-1")
+            return str(value.decode("latin-1"))
     return None
 
 
-def _parse_range(header: str, size: int) -> tuple[int, int] | str | None:
+def _parse_range(header: str, size: int) -> tuple[int, int] | Literal["unsatisfiable"] | None:
     """Parse a single-range ``Range`` header against ``size``.
 
     Returns ``(start, end)`` inclusive for a satisfiable range, ``"unsatisfiable"``

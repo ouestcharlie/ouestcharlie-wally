@@ -5,11 +5,12 @@ from __future__ import annotations
 import calendar
 import logging
 from datetime import datetime
+from typing import Any
 
 from dateutil.parser import isoparse
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType, is_sortable
+from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType, is_sortable
 from ouestcharlie_toolkit.lance_index import FtsFilter
 from ouestcharlie_toolkit.schema import _summary_to_dict
 from ouestcharlie_toolkit.server import AgentBase
@@ -19,6 +20,7 @@ from .searcher import (
     CollectionFilter,
     FilterGroup,
     FilterLeaf,
+    FilterValue,
     GpsBoxFilter,
     PhotoMatch,
     RangeFilter,
@@ -141,7 +143,7 @@ class WallyAgent(AgentBase):
         mcp = self.mcp
 
         @mcp.tool()
-        async def list_search_fields() -> dict:
+        async def list_search_fields() -> dict[str, Any]:
             """List all searchable photo fields with their types and filter formats.
 
             Returns a ``fields`` list of descriptors. Use the field names and formats
@@ -185,9 +187,9 @@ class WallyAgent(AgentBase):
             }
 
         async def _get_summary_tool(
-            filters: dict | None = None,
-            full_text_filter: dict | None = None,
-        ) -> dict:
+            filters: dict[str, Any] | None = None,
+            full_text_filter: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
             except ValueError as exc:
@@ -249,12 +251,12 @@ class WallyAgent(AgentBase):
 
         async def _search_photos_tool(
             ctx: Context,
-            filters: dict | None = None,
-            full_text_filter: dict | None = None,
+            filters: dict[str, Any] | None = None,
+            full_text_filter: dict[str, Any] | None = None,
             sort_by: str = "dateTaken",
             sort_order: str = "desc",
             page: int = 0,
-        ) -> dict:
+        ) -> dict[str, Any]:
             try:
                 node = _parse_filter_node(filters or {}, PHOTO_FIELDS)
             except ValueError as exc:
@@ -350,7 +352,7 @@ class WallyAgent(AgentBase):
 # ---------------------------------------------------------------------------
 
 
-def _resolve_sort_column(name: str, field_config: list) -> str:
+def _resolve_sort_column(name: str, field_config: list[FieldDef]) -> str:
     """Map a ``sort_by`` field name to its LanceDB column, validating it.
 
     ``sort_by`` uses the same field names as ``list_search_fields`` / ``filters``.
@@ -381,7 +383,9 @@ def _validate_sort_order(order: str) -> str:
     return order
 
 
-def _parse_filter_node(raw: dict, field_config: list) -> FilterGroup | FilterLeaf:
+def _parse_filter_node(
+    raw: dict[str, Any], field_config: list[FieldDef]
+) -> FilterGroup | FilterLeaf:
     """Parse a raw MCP filter dict into a FilterGroup or FilterLeaf (recursive).
 
     Three forms are accepted:
@@ -446,7 +450,7 @@ _STRING_MATCH_MODES = ("contains", "startswith", "exact")
 _GPS_BOX_KEYS = ("minLat", "maxLat", "minLon", "maxLon")
 
 
-def _reject_unknown_subkeys(fdef, raw: dict, allowed: tuple[str, ...]) -> None:  # type: ignore[no-untyped-def]
+def _reject_unknown_subkeys(fdef: FieldDef, raw: dict[str, Any], allowed: tuple[str, ...]) -> None:
     """Raise ValueError if a dict-valued filter carries keys outside ``allowed``.
 
     Without this, a misspelled sub-key (e.g. ``from``/``to`` instead of
@@ -461,7 +465,7 @@ def _reject_unknown_subkeys(fdef, raw: dict, allowed: tuple[str, ...]) -> None: 
         )
 
 
-def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
+def _parse_filter_value(fdef: FieldDef, raw: Any) -> FilterValue | None:
     """Parse a single raw filter value according to the field's FieldType."""
     if fdef.type in (FieldType.DATE_RANGE, FieldType.INT_RANGE, FieldType.FLOAT_RANGE):
         if not isinstance(raw, dict):
@@ -550,7 +554,7 @@ def _parse_filter_value(fdef, raw):  # type: ignore[no-untyped-def]
     return None
 
 
-def _build_fts_filter(full_text_filter: dict | None) -> FtsFilter | None:
+def _build_fts_filter(full_text_filter: dict[str, Any] | None) -> FtsFilter | None:
     """Validate and build an FtsFilter from the raw MCP dict.
 
     Raises ValueError on invalid input so callers can re-raise as ToolError.
@@ -648,8 +652,8 @@ def _parse_date_max(s: str | None) -> datetime | None:
 # ---------------------------------------------------------------------------
 
 
-def _match_to_dict(m: PhotoMatch) -> dict:
-    d: dict = {
+def _match_to_dict(m: PhotoMatch) -> dict[str, Any]:
+    d: dict[str, Any] = {
         "partition": m.partition,
         "filename": m.filename,
         "contentHash": m.content_hash,
