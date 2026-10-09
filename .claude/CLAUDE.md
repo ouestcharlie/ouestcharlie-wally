@@ -8,6 +8,17 @@ Never use `python`, `python3`, or `uv run pytest` — use the project's own `.ve
 .venv/bin/pytest tests/ -v
 ```
 
+## Linting
+
+Ruff is a dev dependency, pinned in `pyproject.toml` (locked in `uv.lock`) — the same version the pre-commit hook runs. Use the venv's copy, never `uvx ruff` or a global `ruff` (unpinned version, results may differ from the hook):
+
+```
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+```
+
+To upgrade it, change the pin with `uv add --dev ruff==<version>`.
+
 ## MCP Error Handling
 
 - **Always log exceptions** in MCP tool handlers — FastMCP swallows unhandled errors silently, so without explicit logging they are invisible.

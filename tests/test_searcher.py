@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+import pytest_asyncio
 from ouestcharlie_toolkit.backends.local import LocalBackend
 from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
 from ouestcharlie_toolkit.manifest import ManifestStore
@@ -232,6 +233,79 @@ async def test_tag_filter_no_match(backend: LocalBackend) -> None:
         ),
     )
     assert len(result.matches) == 0
+
+
+async def _tag_search(backend: LocalBackend, *values: str) -> set[str]:
+    result = await search_photos(
+        backend,
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("tags", CollectionFilter(values=values))])
+        ),
+    )
+    return {m.filename for m in result.matches}
+
+
+@pytest_asyncio.fixture()
+async def hierarchical_backend(backend: LocalBackend) -> LocalBackend:
+    await _leaf(
+        backend,
+        "",
+        [
+            _entry("paris.jpg", "pp", tags=["Places|Europe|France|Paris", "Alpinism"]),
+            _entry("rome.jpg", "rr", tags=["Places|Europe|Italy|Rome"]),
+            _entry("tokyo.jpg", "tt", tags=["Places|Asia|Japan|Tokyo", "Alpinism"]),
+        ],
+    )
+    return backend
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tag_filter_by_subtree(hierarchical_backend: LocalBackend) -> None:
+    assert await _tag_search(hierarchical_backend, "Places|Europe") == {"paris.jpg", "rome.jpg"}
+    assert await _tag_search(hierarchical_backend, "Places") == {
+        "paris.jpg",
+        "rome.jpg",
+        "tokyo.jpg",
+    }
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tag_filter_by_bare_name_at_deep_level(
+    hierarchical_backend: LocalBackend,
+) -> None:
+    assert await _tag_search(hierarchical_backend, "Paris") == {"paris.jpg"}
+    assert await _tag_search(hierarchical_backend, "Europe") == {"paris.jpg", "rome.jpg"}
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tag_filter_by_full_path(hierarchical_backend: LocalBackend) -> None:
+    assert await _tag_search(hierarchical_backend, "Places|Europe|France|Paris") == {"paris.jpg"}
+    # A path must start at the root.
+    assert await _tag_search(hierarchical_backend, "Europe|France") == set()
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tag_filter_and_across_tags(hierarchical_backend: LocalBackend) -> None:
+    assert await _tag_search(hierarchical_backend, "Places|Europe", "Alpinism") == {"paris.jpg"}
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tag_filter_ignores_case(hierarchical_backend: LocalBackend) -> None:
+    assert await _tag_search(hierarchical_backend, "paris") == {"paris.jpg"}
+    assert await _tag_search(hierarchical_backend, "PLACES|europe") == {"paris.jpg", "rome.jpg"}
+    assert await _tag_search(hierarchical_backend, "places|Europe|FRANCE|paris") == {"paris.jpg"}
+    assert await _tag_search(hierarchical_backend, "places|europe", "ALPINISM") == {"paris.jpg"}
+
+
+@pytest.mark.asyncio
+async def test_hierarchical_tags_returned_as_paths(hierarchical_backend: LocalBackend) -> None:
+    result = await search_photos(
+        hierarchical_backend,
+        SearchPredicate(
+            root=FilterGroup(children=[FilterLeaf("tags", CollectionFilter(values=("Rome",)))])
+        ),
+    )
+    assert result.matches[0].searchable["tags"] == ["Places|Europe|Italy|Rome"]
 
 
 # ---------------------------------------------------------------------------

@@ -44,7 +44,11 @@ _FIELD_FORMAT: dict[FieldType, str] = {
     ),
     FieldType.INT_RANGE: 'object with optional "min" and/or "max" (integer)',
     FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
-    FieldType.STRING_COLLECTION: "list of strings (AND semantics — all must be present)",
+    FieldType.STRING_COLLECTION: (
+        "list of strings (AND semantics — all must be present); for tags, a "
+        '"|"-separated path matches its whole subtree, a bare name matches at any level, '
+        "and matching ignores case"
+    ),
     FieldType.STRING_MATCH: (
         "string (case-insensitive substring match) or "
         '{"value": "...", "mode": "startswith"|"contains"|"exact"}'
@@ -94,9 +98,14 @@ filters: Filter expression. Three forms are accepted:
             {"any": [{"make": "nikon"}, {"make": "canon"}]}
         ]}
 
-    Tags are cumulative (AND relationship):
+    Tags are hierarchical paths separated by "|" (e.g. "Places|Europe|France").
+    A path matches that tag and everything below it; a bare name matches that
+    name at any level of the hierarchy. Matching ignores case ("paris" finds
+    "Paris"). Tags are cumulative (AND relationship):
         # everything tagged Famille AND Vacances
         {"tags": ["Famille", "Vacances"]}
+        # everything under Places > Europe, at any depth
+        {"tags": ["Places|Europe"]}
 full_text_filter: Full-text search over one or more TEXT-typed
     fields. Schema::
 
@@ -242,6 +251,10 @@ class WallyAgent(AgentBase):
                 ``{{"type": "date_range"|"int_range"|"float_range", "min", "max"}}``.
                 Categorical facets (``mediaType``, ``videoCodec``, ``tags``) —
                 ``{{"type": "string_facets"|"tag_facets", "counts": {{value: count}}}}``.
+                ``tags`` counts are per hierarchy node: keys are tag paths including
+                their ancestors (``"Places"``, ``"Places|Europe"``, …), and each item
+                counts once per node. Spellings that differ only by case are merged
+                under the most frequent one.
                 Boolean counts (``hasAudio``) —
                 ``{{"type": "bool_counts", "true": N, "false": M}}``.
                 Each stat is present only when the matching set has values for it —
