@@ -111,18 +111,28 @@ def test_orientation_lo():
 
 def test_single_tag_produces_array_has_clause():
     result = _clause({"tags": CollectionFilter(values=("travel",))})
-    assert "array_has(tags, 'travel')" in result
+    assert "array_has(tag_terms, 'travel')" in result
 
 
 def test_multiple_tags_each_produce_a_clause():
     result = _clause({"tags": CollectionFilter(values=("travel", "paris"))})
-    assert "array_has(tags, 'travel')" in result
-    assert "array_has(tags, 'paris')" in result
+    assert "array_has(tag_terms, 'travel')" in result
+    assert "array_has(tag_terms, 'paris')" in result
+
+
+def test_tag_path_is_normalized():
+    result = _clause({"tags": CollectionFilter(values=(" Places | Europe ",))})
+    assert "array_has(tag_terms, 'Places|Europe')" in result
+
+
+def test_empty_tag_value_still_produces_a_clause():
+    result = _clause({"tags": CollectionFilter(values=("",))})
+    assert "array_has(tag_terms, '')" in result
 
 
 def test_tag_with_single_quote_is_escaped():
     result = _clause({"tags": CollectionFilter(values=("it's",))})
-    assert "array_has(tags, 'it''s')" in result
+    assert "array_has(tag_terms, 'it''s')" in result
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +244,7 @@ def test_combined_tag_and_gps():
     result = _clause(
         {"tags": CollectionFilter(values=("travel",)), "gps": GpsBoxFilter(min_lat=48.0)}
     )
-    assert "array_has(tags, 'travel')" in result
+    assert "array_has(tag_terms, 'travel')" in result
     assert "gps_lat IS NOT NULL" in result
     assert "gps_lat >= 48.0" in result
 
