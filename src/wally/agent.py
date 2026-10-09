@@ -46,7 +46,8 @@ _FIELD_FORMAT: dict[FieldType, str] = {
     FieldType.FLOAT_RANGE: 'object with optional "min" and/or "max" (float)',
     FieldType.STRING_COLLECTION: (
         "list of strings (AND semantics — all must be present); for tags, a "
-        '"|"-separated path matches its whole subtree and a bare name matches at any level'
+        '"|"-separated path matches its whole subtree, a bare name matches at any level, '
+        "and matching ignores case"
     ),
     FieldType.STRING_MATCH: (
         "string (case-insensitive substring match) or "
@@ -99,7 +100,8 @@ filters: Filter expression. Three forms are accepted:
 
     Tags are hierarchical paths separated by "|" (e.g. "Places|Europe|France").
     A path matches that tag and everything below it; a bare name matches that
-    name at any level of the hierarchy. Tags are cumulative (AND relationship):
+    name at any level of the hierarchy. Matching ignores case ("paris" finds
+    "Paris"). Tags are cumulative (AND relationship):
         # everything tagged Famille AND Vacances
         {"tags": ["Famille", "Vacances"]}
         # everything under Places > Europe, at any depth
@@ -251,7 +253,8 @@ class WallyAgent(AgentBase):
                 ``{{"type": "string_facets"|"tag_facets", "counts": {{value: count}}}}``.
                 ``tags`` counts are per hierarchy node: keys are tag paths including
                 their ancestors (``"Places"``, ``"Places|Europe"``, …), and each item
-                counts once per node.
+                counts once per node. Spellings that differ only by case are merged
+                under the most frequent one.
                 Boolean counts (``hasAudio``) —
                 ``{{"type": "bool_counts", "true": N, "false": M}}``.
                 Each stat is present only when the matching set has values for it —

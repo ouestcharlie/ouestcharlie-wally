@@ -153,7 +153,7 @@ Before executing the query, `search_photos` reads `summary.json` to verify `sche
 |---|---|
 | `dateTaken` range | `date_taken >= TIMESTAMP 'YYYY-MM-DD HH:MM:SS'` / `date_taken <= …` |
 | int/float range (rating, width, …) | `col >= N` / `col <= N` |
-| `tags` (AND) | `array_has(tag_terms, 'value')` per tag — `tag_terms` holds every ancestor path and level name of the photo's `\|`-separated tag paths, so `Places\|Europe` matches its whole subtree and a bare name (`Paris`) matches at any level. Values are normalized like tags (levels trimmed). |
+| `tags` (AND) | `array_has(tag_terms, 'value')` per tag, with the value folded like `tag_terms` (`tags.fold`: NFC + lowercase), so matching ignores case — `tag_terms` holds every ancestor path and level name of the photo's `\|`-separated tag paths, so `Places\|Europe` matches its whole subtree and a bare name (`Paris`) matches at any level. Values are normalized like tags (levels trimmed). |
 | string match (make, model, …) | `lower(col) LIKE '%substring%'` |
 | GPS bounding box | `gps_lat IS NOT NULL AND gps_lon IS NOT NULL [AND gps_lat >= … AND …]` |
 | `FieldType.TEXT` fields | **No SQL clause** — handled via `full_text_filter` / LanceDB FTS |
@@ -220,7 +220,7 @@ Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` retur
 
 `searcher.get_summary(backend, predicate)` reuses `_build_where_clause`/`_build_group` — the exact same filter-to-SQL translation as `search_photos` (see [SQL clause mapping](#sql-clause-mapping) above) — then calls `ouestcharlie_toolkit.partition_summary.compute_summary(lance_index, where_clause)`: one LanceDB scan, aggregated by DuckDB (`COUNT`/`MIN`/`MAX`, categorical and tag facets) in the same pass.
 
-Tag facets (`tags` stat, `{"type": "tag_facets", "counts": {…}}`) are counted per hierarchy node: keys are tag paths including their ancestors (`Places`, `Places|Europe`, …), and a photo counts once per node. The `filters` wire format, parsing (`_parse_filter_node` in `agent.py`), and validation are identical to `search_photos` — the MCP tool docstrings share one `_FILTER_SYNTAX_DOC` constant so the syntax is documented once, not per tool.
+Tag facets (`tags` stat, `{"type": "tag_facets", "counts": {…}}`) are counted per hierarchy node: keys are tag paths including their ancestors (`Places`, `Places|Europe`, …), and a photo counts once per node. Spellings that differ only by case are merged under the most frequent one. The `filters` wire format, parsing (`_parse_filter_node` in `agent.py`), and validation are identical to `search_photos` — the MCP tool docstrings share one `_FILTER_SYNTAX_DOC` constant so the syntax is documented once, not per tool.
 
 ## Scope and Deferred Items
 

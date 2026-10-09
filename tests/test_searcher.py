@@ -290,6 +290,14 @@ async def test_hierarchical_tag_filter_and_across_tags(hierarchical_backend: Loc
 
 
 @pytest.mark.asyncio
+async def test_hierarchical_tag_filter_ignores_case(hierarchical_backend: LocalBackend) -> None:
+    assert await _tag_search(hierarchical_backend, "paris") == {"paris.jpg"}
+    assert await _tag_search(hierarchical_backend, "PLACES|europe") == {"paris.jpg", "rome.jpg"}
+    assert await _tag_search(hierarchical_backend, "places|Europe|FRANCE|paris") == {"paris.jpg"}
+    assert await _tag_search(hierarchical_backend, "places|europe", "ALPINISM") == {"paris.jpg"}
+
+
+@pytest.mark.asyncio
 async def test_hierarchical_tags_returned_as_paths(hierarchical_backend: LocalBackend) -> None:
     result = await search_photos(
         hierarchical_backend,

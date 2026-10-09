@@ -120,9 +120,15 @@ def test_multiple_tags_each_produce_a_clause():
     assert "array_has(tag_terms, 'paris')" in result
 
 
-def test_tag_path_is_normalized():
+def test_tag_path_is_normalized_and_folded():
     result = _clause({"tags": CollectionFilter(values=(" Places | Europe ",))})
-    assert "array_has(tag_terms, 'Places|Europe')" in result
+    assert "array_has(tag_terms, 'places|europe')" in result
+
+
+def test_tag_value_is_case_insensitive():
+    result = _clause({"tags": CollectionFilter(values=("PARIS", "Travel"))})
+    assert "array_has(tag_terms, 'paris')" in result
+    assert "array_has(tag_terms, 'travel')" in result
 
 
 def test_empty_tag_value_still_produces_a_clause():

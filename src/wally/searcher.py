@@ -28,7 +28,7 @@ from ouestcharlie_toolkit.schema import (
     ManifestSummary,
     is_index_schema_compatible,
 )
-from ouestcharlie_toolkit.tags import normalize_path
+from ouestcharlie_toolkit.tags import fold, normalize_path
 
 _log = logging.getLogger(__name__)
 
@@ -399,8 +399,9 @@ def _build_leaf(leaf: FilterLeaf, field_config: list[FieldDef]) -> list[str]:
     if isinstance(fv, CollectionFilter) and fdef.type is FieldType.STRING_COLLECTION:
         # tag_terms holds every ancestor path and level name of the photo's tags:
         # a path matches its whole subtree, a bare name matches at any level.
+        # Terms are folded (case-insensitive), so the value is folded the same way.
         # An empty value is kept as is, so it still matches nothing.
-        return [f"array_has(tag_terms, '{_esc(normalize_path(v) or v)}')" for v in fv.values]
+        return [f"array_has(tag_terms, '{_esc(fold(normalize_path(v) or v))}')" for v in fv.values]
 
     if isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
         col = fdef.entry_attr
