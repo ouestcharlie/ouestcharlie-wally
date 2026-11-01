@@ -189,7 +189,7 @@ Date bounds also accept a time-of-day component via a `T` separator (`"2024-07-1
 
 ## Result Ordering and Pagination
 
-Results are sorted by `sort_by` column (default `date_taken`) in `sort_order` direction (default `desc` — newest first) using LanceDB's native `AsyncQuery.order_by(List[ColumnOrdering])`. A `filename` tiebreaker is always appended to make pagination deterministic when the primary key (e.g. `date_taken`) is NULL or duplicated across rows.
+Results are sorted by the LanceDB column that `sort_by` maps to (default `dateTaken` → `date_taken`) in `sort_order` direction (default `desc` — newest first) using LanceDB's native `AsyncQuery.order_by(List[ColumnOrdering])`. A `filename` tiebreaker is always appended to make pagination deterministic when the primary key (e.g. `date_taken`) is NULL or duplicated across rows.
 
 When `full_text_filter` is set, results are ranked by relevance instead (`nearest_to_text`) — `sort_by` / `sort_order` are ignored.
 
