@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldType
+from ouestcharlie_toolkit.model import PHOTO_FIELDS, FieldType
 
 from wally.agent import (
     _FIELD_FORMAT,

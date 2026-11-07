@@ -11,24 +11,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ouestcharlie_toolkit.backend import Backend
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType
-from ouestcharlie_toolkit.lance_index import (
+from ouestcharlie_toolkit.index import (
     PAGE_SIZE,
     PHOTO_TABLE_NAME,
     FtsFilter,
     LanceIndex,
-    _esc,
+    SummaryStore,
+    compute_summary,
+    sql_quote,
 )
-from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.partition_summary import compute_summary
-from ouestcharlie_toolkit.schema import (
+from ouestcharlie_toolkit.model import (
     LOWEST_SCHEMA_VERSION,
+    PHOTO_FIELDS,
     SCHEMA_VERSION,
+    FieldDef,
+    FieldType,
     ManifestSummary,
+    fold,
     is_index_schema_compatible,
+    normalize_path,
 )
-from ouestcharlie_toolkit.tags import fold, normalize_path
+from ouestcharlie_toolkit.storage import Backend
 
 _log = logging.getLogger(__name__)
 
@@ -206,7 +209,7 @@ async def _verify_index_ready(backend: Backend) -> None:
     so callers can surface a clear "run a full index" message (not treated as
     an unexpected error).
     """
-    store = ManifestStore(backend)
+    store = SummaryStore(backend)
     try:
         summary, _ = await store.read_summary()
     except FileNotFoundError as err:
@@ -401,11 +404,13 @@ def _build_leaf(leaf: FilterLeaf, field_config: list[FieldDef]) -> list[str]:
         # a path matches its whole subtree, a bare name matches at any level.
         # Terms are folded (case-insensitive), so the value is folded the same way.
         # An empty value is kept as is, so it still matches nothing.
-        return [f"array_has(tag_terms, '{_esc(fold(normalize_path(v) or v))}')" for v in fv.values]
+        return [
+            f"array_has(tag_terms, '{sql_quote(fold(normalize_path(v) or v))}')" for v in fv.values
+        ]
 
     if isinstance(fv, StringFilter) and fdef.type is FieldType.STRING_MATCH:
         col = fdef.entry_attr
-        escaped = _esc(fv.value.lower())
+        escaped = sql_quote(fv.value.lower())
         if fv.mode == "startswith":
             return [f"lower({col}) LIKE '{escaped}%'"]
         if fv.mode == "exact":

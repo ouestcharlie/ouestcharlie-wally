@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-from ouestcharlie_toolkit.schema import PhotoEntry
+from ouestcharlie_toolkit.model import PhotoEntry
 
 from wally.http_server import MediaMiddleware, _generate_preview, _parse_range
 

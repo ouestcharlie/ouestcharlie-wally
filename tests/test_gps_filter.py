@@ -6,10 +6,9 @@ import contextlib
 from pathlib import Path
 
 import pytest
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
-from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import SCHEMA_VERSION, PhotoEntry, RootSummary
+from ouestcharlie_toolkit.index import PHOTO_TABLE_NAME, LanceIndex, SummaryStore
+from ouestcharlie_toolkit.model import SCHEMA_VERSION, PhotoEntry, RootSummary
+from ouestcharlie_toolkit.storage import LocalBackend
 
 from wally.searcher import FilterGroup, FilterLeaf, GpsBoxFilter, SearchPredicate, search_photos
 
@@ -38,7 +37,7 @@ async def _leaf(
     lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
     await lance_index.upsert_partition(partition, photos, None)
 
-    store = ManifestStore(backend)
+    store = SummaryStore(backend)
     with contextlib.suppress(FileExistsError):
         await store.create_summary(RootSummary(schema_version=SCHEMA_VERSION))
 

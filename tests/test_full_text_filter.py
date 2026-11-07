@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS
-from ouestcharlie_toolkit.lance_index import FtsFilter
+from ouestcharlie_toolkit.index import FtsFilter
+from ouestcharlie_toolkit.model import PHOTO_FIELDS
 
 from wally.agent import _build_fts_filter
 from wally.searcher import (

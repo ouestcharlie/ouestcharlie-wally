@@ -10,16 +10,15 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, FtsFilter, LanceIndex
-from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import (
+from ouestcharlie_toolkit.index import PHOTO_TABLE_NAME, FtsFilter, LanceIndex, SummaryStore
+from ouestcharlie_toolkit.model import (
     SCHEMA_VERSION,
     PhotoEntry,
     RootSummary,
     deserialize_summary,
     serialize_summary,
 )
+from ouestcharlie_toolkit.storage import LocalBackend
 
 from wally.searcher import FilterGroup, FilterLeaf, RangeFilter, SearchPredicate, get_summary
 
@@ -34,8 +33,8 @@ def backend(tmp_path: Path) -> LocalBackend:
 
 
 @pytest.fixture()
-def store(backend: LocalBackend) -> ManifestStore:
-    return ManifestStore(backend)
+def store(backend: LocalBackend) -> SummaryStore:
+    return SummaryStore(backend)
 
 
 def _entry(
@@ -63,7 +62,7 @@ async def _leaf(backend: LocalBackend, partition: str, photos: list[PhotoEntry])
     lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME, create_if_missing=True)
     await lance_index.upsert_partition(partition, photos, None)
 
-    store = ManifestStore(backend)
+    store = SummaryStore(backend)
     with contextlib.suppress(FileExistsError):
         await store.create_summary(RootSummary(schema_version=SCHEMA_VERSION))
 
@@ -92,7 +91,7 @@ def test_deserialize_legacy_bulky_summary_ignores_partitions() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_full_summary_creates_then_overwrites(store: ManifestStore) -> None:
+async def test_write_full_summary_creates_then_overwrites(store: SummaryStore) -> None:
     """write_full_summary creates summary.json if absent, overwrites if present."""
     await store.write_full_summary(RootSummary(schema_version=SCHEMA_VERSION))
     first, _ = await store.read_summary()

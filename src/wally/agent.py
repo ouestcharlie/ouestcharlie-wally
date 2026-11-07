@@ -10,10 +10,15 @@ from typing import Any
 from dateutil.parser import isoparse
 from mcp.server.mcpserver import Context
 from mcp.server.mcpserver.exceptions import ToolError
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS, FieldDef, FieldType, is_sortable
-from ouestcharlie_toolkit.lance_index import FtsFilter
-from ouestcharlie_toolkit.schema import _summary_to_dict
-from ouestcharlie_toolkit.server import AgentBase
+from ouestcharlie_toolkit.agent import AgentBase
+from ouestcharlie_toolkit.index import FtsFilter
+from ouestcharlie_toolkit.model import (
+    PHOTO_FIELDS,
+    FieldDef,
+    FieldType,
+    is_sortable,
+    summary_to_dict,
+)
 
 from .searcher import (
     BoolFilter,
@@ -224,7 +229,7 @@ class WallyAgent(AgentBase):
             except Exception as exc:
                 raise ToolError(str(exc)) from exc
 
-            return _summary_to_dict(summary)
+            return summary_to_dict(summary)
 
         # Docstring assigned before registration — the decorator below reads
         # __doc__ immediately to build the tool description.

@@ -29,10 +29,10 @@ from urllib.parse import unquote
 
 from ouestcharlie_imageproc.image_proc import PersistentImageProc
 from ouestcharlie_toolkit import VIDEO_SUFFIXES, Backend
-from ouestcharlie_toolkit.backend import backend_from_config
-from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex, _esc, row_to_photo_entry
-from ouestcharlie_toolkit.preview_builder import generate_preview_jpeg
-from ouestcharlie_toolkit.schema import PhotoEntry, preview_jpeg_path, thumbnail_avif_path
+from ouestcharlie_toolkit.index import PHOTO_TABLE_NAME, LanceIndex, row_to_photo_entry, sql_quote
+from ouestcharlie_toolkit.model import PhotoEntry
+from ouestcharlie_toolkit.renditions import generate_preview_jpeg
+from ouestcharlie_toolkit.storage import backend_from_config, preview_jpeg_path, thumbnail_avif_path
 
 _log = logging.getLogger(__name__)
 
@@ -379,7 +379,7 @@ async def _lookup_entry(backend: Backend, partition: str, content_hash: str) -> 
         FileNotFoundError: if no matching entry exists.
     """
     lance_index = await LanceIndex.open(backend, PHOTO_TABLE_NAME)
-    query = f"content_hash = '{_esc(content_hash)}' AND partition = '{_esc(partition)}'"
+    query = f"content_hash = '{sql_quote(content_hash)}' AND partition = '{sql_quote(partition)}'"
     matches, _ = await lance_index.search_where(query, page_size=1)
     if not matches:
         raise FileNotFoundError(
