@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from ouestcharlie_toolkit.fields import PHOTO_FIELDS
+from ouestcharlie_toolkit.model import PHOTO_FIELDS
 
 from wally.searcher import (
     CollectionFilter,

@@ -8,10 +8,8 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from ouestcharlie_toolkit.backends.local import LocalBackend
-from ouestcharlie_toolkit.lance_index import PHOTO_TABLE_NAME, LanceIndex
-from ouestcharlie_toolkit.manifest import ManifestStore
-from ouestcharlie_toolkit.schema import (
+from ouestcharlie_toolkit.index import PHOTO_TABLE_NAME, LanceIndex, SummaryStore
+from ouestcharlie_toolkit.model import (
     LOWEST_SCHEMA_VERSION,
     SCHEMA_VERSION,
     PhotoEntry,
@@ -19,6 +17,7 @@ from ouestcharlie_toolkit.schema import (
     ThumbnailChunk,
     ThumbnailGridLayout,
 )
+from ouestcharlie_toolkit.storage import LocalBackend
 
 from wally.searcher import (
     CollectionFilter,
@@ -41,8 +40,8 @@ def backend(tmp_path: Path) -> LocalBackend:
 
 
 @pytest.fixture()
-def store(backend: LocalBackend) -> ManifestStore:
-    return ManifestStore(backend)
+def store(backend: LocalBackend) -> SummaryStore:
+    return SummaryStore(backend)
 
 
 def _entry(
@@ -96,7 +95,7 @@ async def _leaf(
 
     await lance_index.upsert_partition(partition, photos, thumbnail_lookup or None)
 
-    store = ManifestStore(backend)
+    store = SummaryStore(backend)
     with contextlib.suppress(FileExistsError):
         await store.create_summary(RootSummary(schema_version=SCHEMA_VERSION))
 
@@ -588,7 +587,7 @@ async def test_missing_root_manifest_raises_error(backend: LocalBackend) -> None
 
 @pytest.mark.asyncio
 async def test_schema_version_mismatch_returns_error(
-    store: ManifestStore, backend: LocalBackend
+    store: SummaryStore, backend: LocalBackend
 ) -> None:
     """summary.json below the lowest supported schemaVersion raises ValueError."""
     stale = RootSummary(schema_version=LOWEST_SCHEMA_VERSION - 1)
@@ -599,9 +598,7 @@ async def test_schema_version_mismatch_returns_error(
 
 
 @pytest.mark.asyncio
-async def test_missing_lance_index_raises_error(
-    store: ManifestStore, backend: LocalBackend
-) -> None:
+async def test_missing_lance_index_raises_error(store: SummaryStore, backend: LocalBackend) -> None:
     """summary.json at version 3 but no LanceDB index raises ValueError."""
     await store.create_summary(RootSummary(schema_version=SCHEMA_VERSION))
 
