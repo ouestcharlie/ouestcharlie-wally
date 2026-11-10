@@ -69,4 +69,4 @@ npx @modelcontextprotocol/inspector
 | [**ouestcharlie-wally** *(this repo)*](https://github.com/ouestcharlie/ouestcharlie-wally) | Search/consumption agent |
 | [ouestcharlie-woof](https://github.com/ouestcharlie/ouestcharlie-woof) | Woof controller |
 
-See [ouestcharlie/HLD.md](https://github.com/ouestcharlie/ouestcharlie/blob/master/HLD.md) for the overall system architecture.
+See [ouestcharlie/HLD.md](https://github.com/ouestcharlie/ouestcharlie/blob/master/design/HLD.md) for the overall system architecture.

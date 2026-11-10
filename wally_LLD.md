@@ -212,7 +212,7 @@ Results are paginated at 500 photos per page (`PAGE_SIZE`). `search_where` retur
 | Tool | Description |
 |---|---|
 | `search_photos` | Search photos by structured predicates; returns matches with tile index and thumbnail grid metadata |
-| `get_summary` | Aggregate stats (count, date/rating/width/height/GPS ranges, tag facets) for photos matching the same filter syntax as `search_photos`, computed on demand from the LanceDB index — no precomputed data. Empty `filters` summarizes the whole library. The only tool that returns a tag-facet breakdown. See [Runtime Summaries](../HLD.md#runtime-summaries) in the HLD for the rationale (replaces the old precomputed root `summary.json` partition list). |
+| `get_summary` | Aggregate stats (count, date/rating/width/height/GPS ranges, tag facets) for photos matching the same filter syntax as `search_photos`, computed on demand from the LanceDB index — no precomputed data. Empty `filters` summarizes the whole library. The only tool that returns a tag-facet breakdown. See [Runtime Summaries](https://github.com/ouestcharlie/ouestcharlie/blob/master/design/HLD.md#runtime-summaries) in the HLD for the rationale (replaces the old precomputed root `summary.json` partition list). |
 | `list_search_fields` | Return all queryable fields with types and filter formats |
 | `get_http_port_tool` | Return the port Wally's HTTP preview server is listening on (diagnostic) |
 
